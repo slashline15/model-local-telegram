@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from datetime import datetime
@@ -15,6 +16,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from agents.router import AgentRouter
@@ -85,6 +87,58 @@ def _extract_document_text(path: Path) -> str:
 
 def _now_local_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+# Tabela de substituição para artefatos LaTeX que o modelo às vezes vomita.
+_LATEX_LITERAL_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    (r"\rightarrow", "→"),
+    (r"\Rightarrow", "⇒"),
+    (r"\leftarrow", "←"),
+    (r"\Leftarrow", "⇐"),
+    (r"\to", "→"),
+    (r"\times", "×"),
+    (r"\cdot", "·"),
+    (r"\leq", "≤"),
+    (r"\geq", "≥"),
+    (r"\neq", "≠"),
+    (r"\approx", "≈"),
+    (r"\pm", "±"),
+    (r"\infty", "∞"),
+    (r"\alpha", "α"), (r"\beta", "β"), (r"\gamma", "γ"), (r"\delta", "δ"),
+    (r"\theta", "θ"), (r"\lambda", "λ"), (r"\mu", "μ"), (r"\sigma", "σ"),
+    (r"\pi", "π"), (r"\phi", "φ"), (r"\omega", "ω"),
+)
+
+_INLINE_MATH_RE = re.compile(r"\$([^$\n]{1,200})\$")
+_DISPLAY_MATH_RE = re.compile(r"\$\$([^$]{1,500})\$\$", re.DOTALL)
+_PAREN_MATH_RE = re.compile(r"\\\(([^)]{1,200})\\\)")
+_BRACKET_MATH_RE = re.compile(r"\\\[([^\]]{1,500})\\\]", re.DOTALL)
+
+
+def _sanitize_for_telegram(text: str) -> str:
+    """Tira artefatos LaTeX que aparecem crus no app do Telegram."""
+    out = text
+    for needle, repl in _LATEX_LITERAL_REPLACEMENTS:
+        out = out.replace(needle, repl)
+    # `$\rightarrow$` já virou `$→$` — agora colapso os $ residuais.
+    for rgx in (_DISPLAY_MATH_RE, _PAREN_MATH_RE, _BRACKET_MATH_RE, _INLINE_MATH_RE):
+        out = rgx.sub(lambda m: m.group(1).strip(), out)
+    return out
+
+
+async def _safe_reply(msg: Message, text: str, **kwargs: Any) -> Message:
+    """Tenta enviar como Markdown; se o parser explodir, manda como texto puro.
+
+    Telegram Markdown legacy é estrito com `_`, `*`, `[` desbalanceados — em vez
+    de tentar escapar perfeitamente, deixamos o tipo errado virar plain text.
+    """
+    try:
+        return await msg.reply_text(text=text, parse_mode=ParseMode.MARKDOWN, **kwargs)
+    except BadRequest as exc:
+        if "parse" not in str(exc).lower() and "entity" not in str(exc).lower():
+            raise
+        log.info("Markdown falhou (%s) — reenviando como texto puro.", exc)
+        return await msg.reply_text(text=text, **kwargs)
 
 
 # ─────────────────────────── COMANDOS ───────────────────────────
@@ -209,16 +263,30 @@ async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
 
+    # Carrega o conteúdo dos hits para mostrar um trecho de cada um.
+    hit_ids = [h.interaction_id for h in bundle.hits[:15]]
+    rows = await deps.sqlite.fetch_by_ids(hit_ids)
+    by_id = {r.id: r for r in rows}
+
+    bucket_icon = {"positive": "👍", "negative": "👎", "neutral": "•"}
     lines: list[str] = [
         f"<b>🔎 Recall</b> (dim={bundle.embedding_dim}, "
         f"fallback={'sim' if bundle.fallback_used else 'não'})\n",
     ]
     for h in bundle.hits[:15]:
         score_repr = "—" if h.score is None else str(h.score)
+        icon = bucket_icon.get(h.bucket, "·")
+        row = by_id.get(h.interaction_id)
+        snippet = ""
+        if row is not None:
+            raw = (row.user_message or "").replace("\n", " ").strip()
+            snippet = escape(raw[:100] + ("…" if len(raw) > 100 else ""))
         lines.append(
-            f"• id={h.interaction_id}  sim={h.similarity:.3f}  "
-            f"score={score_repr}  bucket={h.bucket}"
+            f"{icon} <b>id={h.interaction_id}</b> sim={h.similarity:.3f} "
+            f"score={score_repr} <i>[{h.bucket}]</i>"
         )
+        if snippet:
+            lines.append(f"   ↪ <i>{snippet}</i>")
     if bundle.positive_ids:
         lines.append(f"\n<b>positivos</b>: {bundle.positive_ids}")
     if bundle.negative_ids:
@@ -657,8 +725,14 @@ async def _process_user_input(
             )
 
         async with rec.step("send_reply") as s:
-            await msg.reply_text(text=answer, reply_markup=_rating_keyboard(interaction_id))
-            s.set(reply_chars=len(answer))
+            cleaned = _sanitize_for_telegram(answer)
+            await _safe_reply(
+                msg, cleaned, reply_markup=_rating_keyboard(interaction_id)
+            )
+            s.set(
+                reply_chars=len(cleaned),
+                sanitized=cleaned != answer,
+            )
 
     except Exception as exc:  # noqa: BLE001
         error_text = f"{type(exc).__name__}: {exc}"

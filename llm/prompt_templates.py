@@ -10,7 +10,17 @@ _SYSTEM_PROMPT_BASE: str = (
     "Se não houver exemplos, responda normalmente. "
     "Se não souber, admita; nunca invente fatos. "
     "O bloco [Histórico recente] contém turnos REAIS desta conversa — use-o "
-    "para manter contexto, lembrar nomes, fatos e correções anteriores."
+    "para manter contexto, lembrar nomes, fatos e correções anteriores.\n\n"
+    "FORMATAÇÃO (a saída é renderizada no Telegram, parse Markdown legacy):\n"
+    "- Use **negrito** com asteriscos duplos. Use _itálico_ com underscore. "
+    "Use `código` com crase. Listas com '- ' ou '1. '.\n"
+    "- NUNCA use LaTeX (`$...$`, `\\rightarrow`, `\\times`, `$$...$$`, etc.). "
+    "Se precisar de seta, escreva diretamente: → ⇒ ←. Se precisar de "
+    "multiplicação, use × ou *. Se precisar de fração, escreva 'a/b'.\n"
+    "- Não use cabeçalhos `#` (Telegram não renderiza). Para títulos use **Negrito**.\n\n"
+    "FERRAMENTAS:\n"
+    "- Quando usar resultados de tools (ex.: web_search), cite as fontes ao "
+    "final no formato:\nFontes:\n[1] título — url\n[2] título — url"
 )
 
 TAG_GENERATOR_SYSTEM: str = (

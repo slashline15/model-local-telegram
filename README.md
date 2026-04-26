@@ -33,12 +33,16 @@ tg/
   bot.py                # Application + DI (BotDependencies)
   handlers.py           # /start /help /config /stats /recall /history
                         # /ping /whoami /reset + texto/foto/doc/voz
-  callbacks.py          # rate:* e cfg:*
+                        # extração de PDF, vision warning, tool loop,
+                        # sanitização LaTeX → símbolos, parse_mode fallback
+  callbacks.py          # rate:* e cfg:* (engole "Message is not modified")
+scripts/
+  reindex.py            # reconstroi FAISS a partir do SQLite
 tests/
   conftest.py           # fixtures + FakeOllama
   test_*.py             # cobertura por módulo
-main.py                 # bootstrap async + health-check
-requirements.txt
+main.py                 # bootstrap async (health-check em post_init)
+requirements.txt        # +pypdf
 requirements-dev.txt
 pytest.ini
 .env.example
@@ -160,7 +164,7 @@ Você verá no terminal a pipeline detalhada de cada mensagem:
 | `/help`      | lista de comandos                                               |
 | `/config`    | escolher modelo (lista de `GET /api/tags`) e temperatura        |
 | `/stats`     | total, avaliadas, positivas/negativas, latência média, FAISS    |
-| `/recall <texto>` | mostra os hits do RAG: id, similaridade, score, bucket     |
+| `/recall <texto>` | mostra os hits do RAG: id, similaridade, score, bucket + trecho |
 | `/history [n]`    | últimas n interações suas (id, score, intent, modelo)      |
 | `/ping`      | health-check do Ollama (modelos, dim live vs esperada)          |
 | `/whoami`    | seu user_id, username e configuração ativa                      |
@@ -172,21 +176,56 @@ Você verá no terminal a pipeline detalhada de cada mensagem:
 2. **`classify_intent`** — `IntentClassifier` retorna 1 de `ALLOWED_INTENTS`.
 3. **`generate_tags`** — `TagGenerator` retorna 1..3 tags livres em snake_case.
 4. **`route_agent`** — `AgentRouter` mapeia `tag/intent → AgentRoute`.
-5. **`rag_build`** — Two-Stage:
-   - Top-K em FAISS
+5. **`rag_build`** — Two-Stage + histórico cronológico:
+   - últimos N turnos do user_id (config `RAG_RECENT_HISTORY=6`) entram
+     como bloco `[Histórico recente]` antes do contrastivo (resolve "bot
+     esquece o turno anterior" em mensagens curtas)
+   - Top-K em FAISS, dedupado contra IDs já no histórico
    - metadados em SQLite, separa por score
    - **fallback neutro**: se 0 positivos e 0 negativos, usa Top-N como
-     `[Contexto recente]` (assim o bot "puxa memória" mesmo sem ratings)
-6. **`ollama_chat`** — `POST /api/chat` com tools registradas.
+     `[Contexto recente]`
+   - para `intent="summarize"` joga fora o contrastivo (template
+     contrastivo confunde o modelo, que sumarizava as próprias âncoras)
+6. **`ollama_chat`** — `POST /api/chat` com tools registradas. Se o modelo
+   retornar `tool_calls`, **loop até 3 iterações** despachando via
+   `ToolRegistry`, devolvendo `role=tool` e re-chamando `chat`.
 7. **`save_interaction`** — INSERT com prompt_used, tokens, latência,
-   positive/negative IDs, embedding_dim, etc.
+   positive/negative IDs, embedding_dim e `tool_calls` reais executadas.
 8. **`index_interaction_embedding`** — embed da interação `USER\n+\nBOT`
-   adicionado ao FAISS.
-9. **`send_reply`** — resposta com teclado `⭐ 1` … `⭐ 5`.
+   (truncado a 3000 chars para não estourar o context do modelo de
+   embedding) adicionado ao FAISS.
+9. **`send_reply`** — resposta sanitizada (LaTeX `$\rightarrow$` → `→`,
+   `$...$` colapsado) e enviada com `parse_mode=Markdown`. Se o parser do
+   Telegram reclamar, retry sem parse_mode (texto puro).
 10. Clique do usuário ⇒ `callbacks.on_rate` faz `UPDATE interactions SET score`.
+
+### Mídia
+- **Foto**: avisa o usuário se o modelo atual não bate com padrões de
+  visão (`llava`, `vision`, `-vl`, `gemma3`, `gemma4`, `llama3.2-vision`,
+  `qwen2.5-vl`, `pixtral`, etc.). Continua processando — a checagem é só
+  preventiva.
+- **Documento**: extrai texto de `.pdf` (via `pypdf`) e arquivos texto
+  comuns (`.txt/.md/.csv/.log/.json/.yaml/.py/.js/...`), trunca em 8000
+  chars e injeta no input antes da pipeline.
+- **Voz/áudio**: transcrição via Whisper antes de entrar na pipeline.
 
 Cada etapa é cronometrada, logada e persistida em `pipeline_steps` (com o
 mesmo `run_id` da interação).
+
+## Reindex
+
+Quando você muda `EMBEDDING_MODEL`, `EMBEDDING_DIM`, ou o formato do texto
+embedado — ou quando alguma interação ficou órfã do FAISS (input estourou
+o context do modelo de embedding), reconstrua o índice:
+
+```bash
+python -m scripts.reindex --dry-run    # só lista, não toca nada
+python -m scripts.reindex              # apaga FAISS no disco e reconstrói
+```
+
+O SQLite **não** é tocado. Só `data/faiss.index` e `data/faiss_id_map.json`
+são reescritos. Cada interação é regerada com input truncado a 3000 chars,
+mesmo limite usado em runtime.
 
 ## Testes
 
@@ -246,4 +285,27 @@ logada na etapa `route_agent` do pipeline.
 - **Observabilidade**: `PipelineRecorder` mede e loga toda etapa; persiste em
   `pipeline_steps` com `run_id` ligado à `interactions`.
 - **Health-check no boot** valida `/api/tags` e mede a dim de embedding live
-  contra `EMBEDDING_DIM` da config.
+  contra `EMBEDDING_DIM` da config. Roda em `post_init` (loop do
+  `python-telegram-bot`), **não** no bootstrap — caso contrário a
+  `aiohttp.ClientSession` ficaria amarrada a um event loop que será
+  fechado, causando `Event loop is closed` no primeiro request.
+
+## Limites conhecidos / Roadmap
+
+- **Sem preferências persistentes por usuário** ainda. Style directive
+  (ex.: "responda curto") e fatos do usuário (ex.: "betoneiro, não
+  betoneira") só sobrevivem via histórico cronológico (últimos N turnos).
+  Próximos passos: coluna `style_directive` em `user_settings` +
+  comando `/style`, e tabela `user_facts` + comando `/remember`.
+- **Tool calling fica capado em 3 iterações**. Se o modelo entrar em loop
+  pedindo tools, paramos e devolvemos a última resposta como está.
+- **Embedding de mensagens longas é truncado em 3000 chars**. Se o usuário
+  mandar um PDF grande, o vetor representa só o início — boa o bastante
+  pra recall, mas não captura conteúdo profundo. Para chunking real,
+  expanda `_process_user_input` para indexar múltiplos vetores por
+  interação.
+- **`web_search` ainda é mock** (`tools/web_search.py`). Substituir por
+  SerpAPI / Tavily / Brave conforme orçamento.
+- **Vision warning é por substring no nome do modelo**, não consulta
+  `/api/show`. Modelos novos podem precisar entrar em `_VISION_PATTERNS`
+  manualmente.
