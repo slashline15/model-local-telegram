@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/
+*.log
+.DS_Store
+*.excalidraw
+.claude/
+.idea/
+.vscode/
+*.swp
+# arquivos temporários gerados pelo terminal
+2026-*-local-command-caveatcaveat-*.txt
+.env copy.example
