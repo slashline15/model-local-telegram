@@ -12,4 +12,4 @@ data/
 *.swp
 # arquivos temporários gerados pelo terminal
 2026-*-local-command-caveatcaveat-*.txt
-.env copy.example
+assets/*

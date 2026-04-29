@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
+from core.log_context import set_run_id
 from core.logger import get_logger
 
 log = get_logger("pipeline")
@@ -78,7 +79,10 @@ class PipelineRecorder:
             chat_id=chat_id,
             started_at=time.monotonic(),
         )
-        self._tag: str = f"[run={self.run.run_id} u={user_id}]"
+        # Propaga run_id para o logger via ContextVar — todos os logs desta
+        # Task asyncio passam a carregar o id automaticamente.
+        set_run_id(self.run.run_id)
+        self._tag: str = f"[u={user_id}]"
 
     @asynccontextmanager
     async def step(self, name: str, **details: Any) -> AsyncIterator[PipelineStep]:

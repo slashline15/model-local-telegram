@@ -20,7 +20,23 @@ _SYSTEM_PROMPT_BASE: str = (
     "- Não use cabeçalhos `#` (Telegram não renderiza). Para títulos use **Negrito**.\n\n"
     "FERRAMENTAS:\n"
     "- Quando usar resultados de tools (ex.: web_search), cite as fontes ao "
-    "final no formato:\nFontes:\n[1] título — url\n[2] título — url"
+    "final no formato:\nFontes:\n[1] título — url\n[2] título — url\n\n"
+    "MEMÓRIAS:\n"
+    "- Os blocos de exemplos e histórico podem trazer um identificador entre "
+    "colchetes, como [memória #i42] ou [#i42]. Se a sua resposta se basear "
+    "em uma dessas memórias para lembrar um fato, preferência ou correção, "
+    "cite-a no texto entre parênteses como (#i42). Não invente códigos — só "
+    "cite os que aparecem no contexto.\n\n"
+    "AGENDAMENTO PROATIVO:\n"
+    "- Quando o usuário expressar dependência de tempo (ex.: 'tomara que X "
+    "entregue até hoje à tarde', 'amanhã preciso falar com Y', 'se até "
+    "sexta não chegar...'), use a tool `schedule_reminder` para criar um "
+    "lembrete adequado, sem pedir permissão. Calcule `when_iso` a partir "
+    "da 'Data/hora atual' acima. Bom senso: 'depois do almoço' ≈ 14h00 "
+    "local; 'fim do dia' ≈ 18h00; 'amanhã cedo' ≈ 09h00.\n"
+    "- Em seguida, na sua resposta, mencione discretamente o agendamento "
+    "(ex.: '_te lembro disso depois do almoço._'). Não agende coisas "
+    "óbvias, repetidas ou que o usuário já indicou que não quer."
 )
 
 TAG_GENERATOR_SYSTEM: str = (
@@ -36,6 +52,7 @@ TAG_GENERATOR_SYSTEM: str = (
 class FewShotExample:
     user_message: str
     bot_response: str
+    code: str | None = None  # ex.: "i42" — para citação rastreável no prompt
 
 
 def build_system_prompt(
@@ -65,8 +82,11 @@ def _examples_block(items: list[FewShotExample]) -> str:
         return "(nenhum exemplo disponível)"
     chunks: list[str] = []
     for i, ex in enumerate(items, start=1):
+        header = f"Exemplo {i}"
+        if ex.code:
+            header += f" [memória #{ex.code}]"
         chunks.append(
-            f"Exemplo {i}:\n"
+            f"{header}:\n"
             f"  Usuário: {_truncate(ex.user_message)}\n"
             f"  Resposta: {_truncate(ex.bot_response)}"
         )
@@ -76,8 +96,11 @@ def _examples_block(items: list[FewShotExample]) -> str:
 def _history_block(items: list[FewShotExample]) -> str:
     chunks: list[str] = []
     for i, ex in enumerate(items, start=1):
+        header = f"Turno {i}"
+        if ex.code:
+            header += f" [#{ex.code}]"
         chunks.append(
-            f"Turno {i}:\n"
+            f"{header}:\n"
             f"  Você: {_truncate(ex.user_message, 500)}\n"
             f"  Bot:  {_truncate(ex.bot_response, 500)}"
         )

@@ -20,6 +20,8 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from agents.router import AgentRouter
+from core.chat_runner import ChatRunResult, run_chat_with_fallback
+from core.codes import format_hashtag, parse_code
 from core.logger import get_logger
 from core.pipeline import PipelineRecorder
 from llm.contrastive_rag import RagBundle
@@ -156,6 +158,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/stats  – estatísticas do banco\n"
         "/recall – ver o que o RAG recuperaria\n"
         "/history – suas últimas interações\n"
+        "/reminders – seus lembretes pendentes\n"
         "/ping   – health-check do Ollama\n"
         "/whoami – seus dados\n"
         "/reset  – restaurar configurações padrão"
@@ -170,7 +173,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/config   – modelo + temperatura\n"
         "/stats    – estatísticas globais\n"
         "/recall <texto>   – debug do RAG (top hits)\n"
+        "/recall #i<id>    – abre uma interação pelo código\n"
         "/history [n]      – últimas n interações suas (default 5)\n"
+        "/reminders        – seus lembretes pendentes (com cancelar)\n"
         "/ping     – health-check Ollama (modelos + dim do embedding)\n"
         "/whoami   – seu user_id e configuração ativa\n"
         "/reset    – volta sua configuração ao padrão\n\n"
@@ -225,10 +230,10 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     snap = await deps.sqlite.stats(faiss_indexed=deps.faiss.ntotal)
     avg = f"{snap.avg_latency_ms:.0f}ms" if snap.avg_latency_ms is not None else "—"
     text = (
-        "<b>📊 Estatísticas</b>\n"
+        "<b>📊 Estatísticas</b>\n\n"
         f"• Interações:        {snap.total_interactions}\n"
         f"• Avaliadas:         {snap.rated} "
-        f"(👍 {snap.positives} / 👎 {snap.negatives})\n"
+        f"(🟢 {snap.positives} / ⭕ {snap.negatives})\n"
         f"• Usuários únicos:   {snap.distinct_users}\n"
         f"• Intents distintas: {snap.distinct_intents}\n"
         f"• Latência média:    {avg}\n"
@@ -238,18 +243,75 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+async def _show_interaction_by_code(
+    msg: Message,
+    deps: "BotDependencies",
+    interaction_id: int,
+    *,
+    user_id: int,
+) -> None:
+    rows = await deps.sqlite.fetch_by_ids([interaction_id])
+    if not rows:
+        await msg.reply_text(f"Não encontrei {format_hashtag(interaction_id)}.")
+        return
+    row = rows[0]
+    if row.user_id != user_id:
+        # Privacidade: cada usuário só vê o próprio histórico via /recall.
+        await msg.reply_text(f"{format_hashtag(interaction_id)} não pertence a você.")
+        return
+
+    score = "—" if row.score is None else str(row.score)
+    intent = row.intent or "—"
+    tags = ", ".join(row.tags) if row.tags else "—"
+    user_msg = (row.user_message or "").strip()
+    bot_msg = (row.bot_response or "").strip()
+
+    lines = [
+        f"<b>📌 {escape(format_hashtag(interaction_id))}</b>  "
+        f"<i>(score={score}, intent={escape(intent)})</i>",
+        f"<b>tags:</b> {escape(tags)}",
+        f"<b>quando:</b> {escape(row.timestamp or '—')}",
+        "",
+        f"<b>Você:</b>\n<code>{escape(user_msg[:1500])}</code>",
+        "",
+        f"<b>Bot:</b>\n<code>{escape(bot_msg[:1500])}</code>",
+    ]
+    if row.positive_ids:
+        lines.append(
+            "<b>baseado em (positivos):</b> "
+            + " ".join(format_hashtag(i) for i in row.positive_ids)
+        )
+    if row.negative_ids:
+        lines.append(
+            "<b>contra-exemplos:</b> "
+            + " ".join(format_hashtag(i) for i in row.negative_ids)
+        )
+    await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
     args = context.args or []
     if not args:
         await update.effective_message.reply_text(
-            "Uso: /recall <texto>\nMostra o que o RAG recuperaria para essa busca."
+            "Uso:\n"
+            "  /recall <texto>   – top hits do RAG\n"
+            "  /recall #i<id>    – abre a interação pelo código"
         )
         return
 
     deps = _deps(context)
     query = " ".join(args).strip()
+
+    # Atalho: /recall #i42 → abre a interação pelo código
+    if len(args) == 1:
+        target_id = parse_code(args[0])
+        if target_id is not None:
+            await _show_interaction_by_code(
+                update.effective_message, deps, target_id, user_id=update.effective_user.id
+            )
+            return
 
     try:
         bundle: RagBundle = await deps.rag.debug_recall(query)
@@ -268,9 +330,9 @@ async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     rows = await deps.sqlite.fetch_by_ids(hit_ids)
     by_id = {r.id: r for r in rows}
 
-    bucket_icon = {"positive": "👍", "negative": "👎", "neutral": "•"}
+    bucket_icon = {"positive": "🟢", "negative": "⭕", "neutral": "🔵"}
     lines: list[str] = [
-        f"<b>🔎 Recall</b> (dim={bundle.embedding_dim}, "
+        f"<b>🔎 Recall</b> (dim={bundle.embedding_dim}\n, "
         f"fallback={'sim' if bundle.fallback_used else 'não'})\n",
     ]
     for h in bundle.hits[:15]:
@@ -282,8 +344,8 @@ async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             raw = (row.user_message or "").replace("\n", " ").strip()
             snippet = escape(raw[:100] + ("…" if len(raw) > 100 else ""))
         lines.append(
-            f"{icon} <b>id={h.interaction_id}</b> sim={h.similarity:.3f} "
-            f"score={score_repr} <i>[{h.bucket}]</i>"
+            f"{icon} <b>{escape(format_hashtag(h.interaction_id))}</b> "
+            f"sim={h.similarity:.3f} score={score_repr} <i>[{h.bucket}]</i>"
         )
         if snippet:
             lines.append(f"   ↪ <i>{snippet}</i>")
@@ -323,8 +385,8 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         intent = r.intent or "—"
         snippet = (r.user_message or "").replace("\n", " ")[:60]
         lines.append(
-            f"• id={r.id}  score={score}  intent={escape(intent)}  "
-            f"model={escape(r.model_used or '—')}\n"
+            f"• {escape(format_hashtag(r.id))}  score={score}  "
+            f"intent={escape(intent)}  model={escape(r.model_used or '—')}\n"
             f"   ↪ <i>{escape(snippet)}</i>"
         )
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
@@ -370,6 +432,42 @@ async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"• atualizado:  {s.updated_at or '—'}"
     )
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_message is None or update.effective_user is None:
+        return
+    deps = _deps(context)
+    rows = await deps.sqlite.list_user_reminders(
+        update.effective_user.id, only_pending=True, limit=20
+    )
+    if not rows:
+        await update.effective_message.reply_text(
+            "Sem lembretes pendentes. Eu mesmo posso agendar quando algo "
+            "merece follow-up — é só conversar normalmente."
+        )
+        return
+
+    lines: list[str] = ["<b>⏰ Lembretes pendentes</b>"]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for r in rows:
+        snippet = (r.text or "").replace("\n", " ")
+        if len(snippet) > 80:
+            snippet = snippet[:79] + "…"
+        lines.append(
+            f"\n• <code>#{r.id}</code> — {escape(r.scheduled_for)}\n"
+            f"  ↪ <i>{escape(snippet)}</i>"
+        )
+        buttons.append([
+            InlineKeyboardButton(
+                f"❌ cancelar #{r.id}", callback_data=f"rem:cancel:{r.id}"
+            )
+        ])
+    await update.effective_message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+    )
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -611,66 +709,58 @@ async def _process_user_input(
             tools=len(deps.tools.specs_for_ollama()),
         ) as s:
             tool_specs = deps.tools.specs_for_ollama() or None
-            messages: list[ChatMessage] = [
+            base_messages: list[ChatMessage] = [
                 ChatMessage(role="system", content=bundle.system_prompt),
                 ChatMessage(role="user", content=bundle.user_prompt, images_b64=images_b64),
             ]
-            chat_result = await deps.ollama.chat(
-                messages=messages,
-                model=user_settings.current_model,
+
+            notice_msg: Message | None = None
+
+            async def _on_first_failure(exc: Exception, primary_model: str) -> None:
+                nonlocal notice_msg
+                try:
+                    notice_msg = await msg.reply_text(
+                        "⚠️ Probleminha técnico no modelo principal. "
+                        "Tô tentando outro caminho, já volto…"
+                    )
+                except Exception as cb_exc:  # noqa: BLE001
+                    log.warning("Não consegui avisar usuário: %s", cb_exc)
+
+            async def _dispatch(name: str, args: dict[str, Any]) -> Any:
+                return await deps.tools.dispatch(
+                    name, args, ctx={"user_id": user_id, "chat_id": chat_id},
+                )
+
+            run: ChatRunResult = await run_chat_with_fallback(
+                ollama=deps.ollama,
+                openai=deps.openai_chat,
+                base_messages=base_messages,
+                primary_model=user_settings.current_model,
                 temperature=user_settings.temperature,
                 tools=tool_specs,
+                tool_dispatcher=_dispatch,
+                fallback_models=deps.settings.chat_fallback_models,
+                openai_fallback_model=(
+                    deps.settings.openai_chat_fallback_model
+                    if deps.openai_chat is not None
+                    else None
+                ),
+                max_tool_iter=_TOOL_LOOP_MAX_ITER,
+                on_first_failure=_on_first_failure,
             )
 
-            tool_iter = 0
-            while chat_result.tool_calls and tool_iter < _TOOL_LOOP_MAX_ITER:
-                tool_iter += 1
-                # echo do turno do assistente que pediu as tools
-                messages.append(
-                    ChatMessage(
-                        role="assistant",
-                        content=chat_result.content or "",
-                        tool_calls=chat_result.tool_calls,
-                    )
-                )
-                for call in chat_result.tool_calls:
-                    fn = call.get("function") or {}
-                    tname = str(fn.get("name") or "")
-                    raw_args = fn.get("arguments") or {}
-                    args = raw_args if isinstance(raw_args, dict) else {}
-                    log.info(
-                        "🔧 tool call #%d: %s(%s)",
-                        tool_iter, tname, json.dumps(args, ensure_ascii=False),
-                    )
-                    try:
-                        result = await deps.tools.dispatch(tname, args)
-                        result_str = json.dumps(result, ensure_ascii=False, default=str)
-                        ok = True
-                    except Exception as exc:  # noqa: BLE001
-                        log.warning("Tool %s falhou: %s", tname, exc)
-                        result_str = json.dumps(
-                            {"error": f"{type(exc).__name__}: {exc}"},
-                            ensure_ascii=False,
-                        )
-                        ok = False
-                    tool_invocations.append({
-                        "iteration": tool_iter,
-                        "name": tname,
-                        "arguments": args,
-                        "ok": ok,
-                        "result": result_str[:1000],
-                    })
-                    messages.append(
-                        ChatMessage(role="tool", content=result_str, name=tname)
-                    )
-                chat_result = await deps.ollama.chat(
-                    messages=messages,
-                    model=user_settings.current_model,
-                    temperature=user_settings.temperature,
-                    tools=tool_specs,
-                )
-
+            chat_result = run.chat_result
+            tool_invocations = run.tool_invocations
+            tool_iter = run.tool_iterations
             answer = chat_result.content.strip() or "(modelo retornou vazio)"
+
+            # Limpa o aviso temporário se o fallback resolveu.
+            if notice_msg is not None:
+                try:
+                    await notice_msg.delete()
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("Não consegui apagar aviso de fallback: %s", exc)
+
             s.set(
                 response_chars=len(answer),
                 prompt_tokens=chat_result.prompt_tokens,
@@ -678,6 +768,10 @@ async def _process_user_input(
                 ollama_total_ms=chat_result.total_duration_ms,
                 tool_iterations=tool_iter,
                 tool_calls_executed=len(tool_invocations),
+                model_used=run.model_used,
+                backend=run.backend,
+                fell_back=run.fell_back,
+                primary_error=run.primary_error,
             )
 
         async with rec.step("save_interaction") as s:
@@ -726,12 +820,14 @@ async def _process_user_input(
 
         async with rec.step("send_reply") as s:
             cleaned = _sanitize_for_telegram(answer)
+            tagged = f"{cleaned}\n\n─ {format_hashtag(interaction_id)}"
             await _safe_reply(
-                msg, cleaned, reply_markup=_rating_keyboard(interaction_id)
+                msg, tagged, reply_markup=_rating_keyboard(interaction_id)
             )
             s.set(
-                reply_chars=len(cleaned),
+                reply_chars=len(tagged),
                 sanitized=cleaned != answer,
+                code=format_hashtag(interaction_id),
             )
 
     except Exception as exc:  # noqa: BLE001

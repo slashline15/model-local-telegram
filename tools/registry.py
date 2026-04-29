@@ -53,11 +53,27 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools.keys())
 
-    async def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
+    async def dispatch(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        ctx: dict[str, Any] | None = None,
+    ) -> Any:
+        """Despacha a tool. Se o handler declara `_ctx`, injeta o contexto.
+
+        `ctx` carrega user_id/chat_id/interaction_id quando disponíveis — usado
+        por tools que precisam saber em nome de quem agir (ex.: lembretes).
+        """
         if name not in self._tools:
             raise ToolNotFoundError(f"Tool '{name}' não registrada.")
+        spec = self._tools[name]
+        kwargs = dict(arguments)
+        sig = inspect.signature(spec.handler)
+        if "_ctx" in sig.parameters:
+            kwargs["_ctx"] = ctx or {}
         try:
-            return await self._tools[name].handler(**arguments)
+            return await spec.handler(**kwargs)
         except TypeError as exc:
             raise ToolExecutionError(
                 f"Argumentos inválidos para '{name}': {exc}"

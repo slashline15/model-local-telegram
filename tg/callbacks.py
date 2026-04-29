@@ -21,7 +21,7 @@ def _deps(context: ContextTypes.DEFAULT_TYPE) -> "BotDependencies":
 async def _safe_clear_keyboard(query: CallbackQuery) -> None:
     """Remove o teclado inline; ignora `Message is not modified` (clique repetido)."""
     try:
-        await _safe_clear_keyboard(query)
+        await query.edit_message_reply_markup(reply_markup=None)
     except BadRequest as exc:
         if "not modified" in str(exc).lower():
             return
@@ -33,7 +33,6 @@ async def on_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None or query.data is None:
         return
-    await query.answer()
 
     try:
         _, raw_id, raw_score = query.data.split(":", 2)
@@ -41,6 +40,7 @@ async def on_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         score = int(raw_score)
     except (ValueError, IndexError):
         log.warning("callback_data inválido: %r", query.data)
+        await query.answer()
         return
 
     deps = _deps(context)
@@ -48,16 +48,35 @@ async def on_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await deps.sqlite.update_score(interaction_id, score)
     except Exception as exc:  # noqa: BLE001
         log.exception("Falha ao salvar score")
+        await query.answer(text=f"Erro ao salvar: {exc}", show_alert=True)
         await _safe_clear_keyboard(query)
-        if query.message is not None:
-            await query.message.reply_text(f"Erro ao salvar avaliação: {exc}")
         return
 
-    await query.edit_message_reply_markup(reply_markup=None)
-    if query.message is not None:
-        await query.message.reply_text(
-            f"Avaliação registrada: {'⭐' * score} ({score}/5)."
-        )
+    # Toast efêmero em vez de nova mensagem — mantém o chat limpo.
+    await query.answer(text=f"Avaliação registrada: {score}/5 ⭐", show_alert=False)
+    await _safe_clear_keyboard(query)
+
+
+async def on_reminder_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback dos botões 'rem:cancel:<id>'."""
+    query = update.callback_query
+    if query is None or query.data is None or update.effective_user is None:
+        return
+
+    try:
+        _, _, raw_id = query.data.split(":", 2)
+        reminder_id = int(raw_id)
+    except (ValueError, IndexError):
+        await query.answer()
+        return
+
+    deps = _deps(context)
+    ok = await deps.reminders.cancel(reminder_id, user_id=update.effective_user.id)
+    await query.answer(
+        text=("Lembrete cancelado." if ok else "Não consegui cancelar (já foi?)."),
+        show_alert=False,
+    )
+    await _safe_clear_keyboard(query)
 
 
 async def on_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

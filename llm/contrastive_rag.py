@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+_QUERY_EMBED_MAX_CHARS: int = 3000  # espelha _EMBED_INPUT_MAX_CHARS em handlers.py
+
+from core.codes import format_code
 from core.logger import get_logger
 from database.faiss_mgr import FaissManager
 from database.sqlite_mgr import Interaction, SQLiteManager
@@ -15,6 +18,14 @@ from llm.prompt_templates import (
     render_neutral_context,
     render_qa_prompt,
 )
+
+
+def _to_example(row: Interaction) -> FewShotExample:
+    return FewShotExample(
+        user_message=row.user_message,
+        bot_response=row.bot_response,
+        code=format_code(row.id),
+    )
 
 log = get_logger(__name__)
 
@@ -118,9 +129,7 @@ class ContrastiveRAG:
                 user_id, limit=n_recent_history
             )
             history_rows = list(reversed(recent))  # mais antigo primeiro
-            history_examples = [
-                FewShotExample(r.user_message, r.bot_response) for r in history_rows
-            ]
+            history_examples = [_to_example(r) for r in history_rows]
 
         # 2) Para summarize, contrastivo atrapalha — usa só histórico.
         if intent == "summarize":
@@ -156,7 +165,13 @@ class ContrastiveRAG:
             )
 
         # 4) Busca semântica.
-        query_vec: np.ndarray = await self._ollama.embed(user_message)
+        query_text = user_message[:_QUERY_EMBED_MAX_CHARS]
+        if len(user_message) > _QUERY_EMBED_MAX_CHARS:
+            log.debug(
+                "RAG: query truncada para embedding %d → %d chars",
+                len(user_message), _QUERY_EMBED_MAX_CHARS,
+            )
+        query_vec: np.ndarray = await self._ollama.embed(query_text)
         embedding_dim = int(query_vec.shape[-1])
         log.debug("RAG: embedding gerado dim=%d", embedding_dim)
 
@@ -215,9 +230,7 @@ class ContrastiveRAG:
             neutral = neutral_pool[: self._max_neutral]
             user_prompt = render_neutral_context(
                 user_message=user_message,
-                examples=[
-                    FewShotExample(n.user_message, n.bot_response) for n in neutral
-                ],
+                examples=[_to_example(n) for n in neutral],
                 history=history_examples or None,
             )
             log.info(
@@ -227,12 +240,8 @@ class ContrastiveRAG:
         else:
             user_prompt = render_contrastive_prompt(
                 user_message=user_message,
-                positives=[
-                    FewShotExample(p.user_message, p.bot_response) for p in positives
-                ],
-                negatives=[
-                    FewShotExample(n.user_message, n.bot_response) for n in negatives
-                ],
+                positives=[_to_example(p) for p in positives],
+                negatives=[_to_example(n) for n in negatives],
                 history=history_examples or None,
             )
 

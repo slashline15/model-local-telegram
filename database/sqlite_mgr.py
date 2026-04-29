@@ -64,6 +64,32 @@ class PipelineStepRow:
 
 
 @dataclass(slots=True, frozen=True)
+class Reminder:
+    id: int
+    user_id: int
+    chat_id: int
+    text: str
+    scheduled_for: str  # ISO local
+    status: str  # pending | sent | cancelled
+    source_interaction_id: int | None
+    created_at: str
+    sent_at: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class User:
+    id: int
+    telegram_id: int
+    name: str
+    email: str | None
+    role: str          # superadmin | admin | engineer | supervisor | worker | client
+    status: str        # active | inactive | banned
+    invited_by: int | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(slots=True, frozen=True)
 class StatsSnapshot:
     total_interactions: int
     rated: int
@@ -116,6 +142,20 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 """
 
+_REMINDERS_BASE: str = """
+CREATE TABLE IF NOT EXISTS reminders (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id               INTEGER NOT NULL,
+    chat_id               INTEGER NOT NULL,
+    text                  TEXT    NOT NULL,
+    scheduled_for         TEXT    NOT NULL,
+    status                TEXT    NOT NULL DEFAULT 'pending',
+    source_interaction_id INTEGER,
+    created_at            TEXT    NOT NULL,
+    sent_at               TEXT
+);
+"""
+
 _PIPELINE_STEPS_BASE: str = """
 CREATE TABLE IF NOT EXISTS pipeline_steps (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,6 +173,20 @@ CREATE TABLE IF NOT EXISTS pipeline_steps (
 );
 """
 
+_USERS_BASE: str = """
+CREATE TABLE IF NOT EXISTS users (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id  INTEGER UNIQUE NOT NULL,
+    name         TEXT    NOT NULL,
+    email        TEXT,
+    role         TEXT    NOT NULL DEFAULT 'worker',
+    status       TEXT    NOT NULL DEFAULT 'active',
+    invited_by   INTEGER REFERENCES users(id),
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL
+);
+"""
+
 _INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_interactions_user      ON interactions(user_id);",
     "CREATE INDEX IF NOT EXISTS idx_interactions_score     ON interactions(score);",
@@ -141,6 +195,12 @@ _INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_pipeline_run           ON pipeline_steps(run_id);",
     "CREATE INDEX IF NOT EXISTS idx_pipeline_interaction   ON pipeline_steps(interaction_id);",
     "CREATE INDEX IF NOT EXISTS idx_pipeline_user          ON pipeline_steps(user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_reminders_status       ON reminders(status);",
+    "CREATE INDEX IF NOT EXISTS idx_reminders_user         ON reminders(user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_reminders_due          ON reminders(scheduled_for);",
+    "CREATE INDEX IF NOT EXISTS idx_users_telegram         ON users(telegram_id);",
+    "CREATE INDEX IF NOT EXISTS idx_users_role             ON users(role);",
+    "CREATE INDEX IF NOT EXISTS idx_users_status           ON users(status);",
 )
 
 # (tabela, coluna, declaração) — aplicado se faltar a coluna em DBs antigos.
@@ -191,6 +251,8 @@ class SQLiteManager:
             await conn.execute(_INTERACTIONS_BASE)
             await conn.execute(_USER_SETTINGS_BASE)
             await conn.execute(_PIPELINE_STEPS_BASE)
+            await conn.execute(_REMINDERS_BASE)
+            await conn.execute(_USERS_BASE)
             # 2) migrations ANTES dos índices: alguns índices referenciam
             #    colunas adicionadas em versões posteriores do schema.
             await self._apply_migrations(conn)
@@ -423,6 +485,89 @@ class SQLiteManager:
             )
             await conn.commit()
 
+    # ---------- reminders ----------
+
+    async def insert_reminder(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        text: str,
+        scheduled_for: str,
+        source_interaction_id: int | None = None,
+    ) -> int:
+        async with aiosqlite.connect(self._db_path) as conn:
+            cur = await conn.execute(
+                """
+                INSERT INTO reminders
+                    (user_id, chat_id, text, scheduled_for, status,
+                     source_interaction_id, created_at)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (user_id, chat_id, text, scheduled_for,
+                 source_interaction_id, _now_iso()),
+            )
+            await conn.commit()
+            if cur.lastrowid is None:
+                raise StorageError("INSERT em reminders não retornou lastrowid.")
+            return int(cur.lastrowid)
+
+    async def mark_reminder_sent(self, reminder_id: int) -> None:
+        async with aiosqlite.connect(self._db_path) as conn:
+            await conn.execute(
+                "UPDATE reminders SET status='sent', sent_at=? WHERE id=?",
+                (_now_iso(), reminder_id),
+            )
+            await conn.commit()
+
+    async def cancel_reminder(self, reminder_id: int, *, user_id: int) -> bool:
+        async with aiosqlite.connect(self._db_path) as conn:
+            cur = await conn.execute(
+                "UPDATE reminders SET status='cancelled' "
+                "WHERE id=? AND user_id=? AND status='pending'",
+                (reminder_id, user_id),
+            )
+            await conn.commit()
+            return (cur.rowcount or 0) > 0
+
+    async def list_pending_reminders(self) -> list[Reminder]:
+        async with aiosqlite.connect(self._db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM reminders WHERE status='pending' "
+                "ORDER BY scheduled_for ASC"
+            ) as cur:
+                rows = await cur.fetchall()
+        return [self._row_to_reminder(r) for r in rows]
+
+    async def list_user_reminders(
+        self, user_id: int, *, only_pending: bool = True, limit: int = 20
+    ) -> list[Reminder]:
+        clause = "WHERE user_id=?" + (" AND status='pending'" if only_pending else "")
+        async with aiosqlite.connect(self._db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM reminders {clause} "
+                f"ORDER BY scheduled_for ASC LIMIT ?",
+                (user_id, int(limit)),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [self._row_to_reminder(r) for r in rows]
+
+    @staticmethod
+    def _row_to_reminder(row: aiosqlite.Row) -> Reminder:
+        return Reminder(
+            id=int(row["id"]),
+            user_id=int(row["user_id"]),
+            chat_id=int(row["chat_id"]),
+            text=str(row["text"]),
+            scheduled_for=str(row["scheduled_for"]),
+            status=str(row["status"]),
+            source_interaction_id=row["source_interaction_id"],
+            created_at=str(row["created_at"]),
+            sent_at=row["sent_at"],
+        )
+
     # ---------- pipeline_steps ----------
 
     async def save_pipeline_steps(
@@ -457,6 +602,100 @@ class SQLiteManager:
                 rows,
             )
             await conn.commit()
+
+    # ---------- users ----------
+
+    async def register_user(
+        self,
+        *,
+        telegram_id: int,
+        name: str,
+        email: str | None = None,
+        role: str = "worker",
+        invited_by: int | None = None,
+    ) -> User:
+        now = _now_iso()
+        async with aiosqlite.connect(self._db_path) as conn:
+            cur = await conn.execute(
+                """
+                INSERT INTO users (telegram_id, name, email, role, status, invited_by,
+                                   created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                    name       = excluded.name,
+                    updated_at = excluded.updated_at
+                """,
+                (telegram_id, name, email, role, invited_by, now, now),
+            )
+            await conn.commit()
+            row_id = cur.lastrowid
+        user = await self.get_user_by_telegram_id(telegram_id)
+        if user is None:
+            raise StorageError(f"Falha ao registrar usuário telegram_id={telegram_id}")
+        return user
+
+    async def get_user_by_telegram_id(self, telegram_id: int) -> User | None:
+        async with aiosqlite.connect(self._db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)
+            ) as cur:
+                row = await cur.fetchone()
+        return self._row_to_user(row) if row else None
+
+    async def get_user_by_id(self, user_id: int) -> User | None:
+        async with aiosqlite.connect(self._db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            ) as cur:
+                row = await cur.fetchone()
+        return self._row_to_user(row) if row else None
+
+    async def update_user_role(self, user_id: int, role: str) -> None:
+        async with aiosqlite.connect(self._db_path) as conn:
+            await conn.execute(
+                "UPDATE users SET role = ?, updated_at = ? WHERE id = ?",
+                (role, _now_iso(), user_id),
+            )
+            await conn.commit()
+
+    async def update_user_status(self, user_id: int, status: str) -> None:
+        async with aiosqlite.connect(self._db_path) as conn:
+            await conn.execute(
+                "UPDATE users SET status = ?, updated_at = ? WHERE id = ?",
+                (status, _now_iso(), user_id),
+            )
+            await conn.commit()
+
+    async def list_users(
+        self, *, role: str | None = None, status: str = "active", limit: int = 100
+    ) -> list[User]:
+        if role:
+            query = "SELECT * FROM users WHERE status = ? AND role = ? LIMIT ?"
+            params: tuple = (status, role, limit)
+        else:
+            query = "SELECT * FROM users WHERE status = ? LIMIT ?"
+            params = (status, limit)
+        async with aiosqlite.connect(self._db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(query, params) as cur:
+                rows = await cur.fetchall()
+        return [self._row_to_user(r) for r in rows]
+
+    @staticmethod
+    def _row_to_user(row: aiosqlite.Row) -> User:
+        return User(
+            id=int(row["id"]),
+            telegram_id=int(row["telegram_id"]),
+            name=str(row["name"]),
+            email=row["email"],
+            role=str(row["role"]),
+            status=str(row["status"]),
+            invited_by=row["invited_by"],
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
 
     # ---------- helpers ----------
 

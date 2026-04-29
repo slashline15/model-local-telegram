@@ -6,13 +6,16 @@ import sys
 from core.audio_transcriber import WhisperTranscriber
 from core.config import get_settings
 from core.logger import get_logger, setup_logging
+from core.reminders import ReminderManager
 from database.faiss_mgr import FaissManager
 from database.sqlite_mgr import SQLiteManager
 from llm.contrastive_rag import ContrastiveRAG
 from llm.intent_classifier import IntentClassifier
 from llm.ollama_client import OllamaClient
+from llm.openai_chat_client import OpenAIChatClient
 from llm.tag_generator import TagGenerator
 from tg.bot import BotDependencies, build_application
+from tools import reminders as reminder_tools
 from tools import web_search
 from tools.registry import ToolRegistry
 
@@ -21,7 +24,7 @@ from tools.registry import ToolRegistry
 
 async def _bootstrap() -> BotDependencies:
     settings = get_settings()
-    setup_logging(level=settings.log_level, log_file=settings.log_file)
+    setup_logging(level=settings.log_level, log_file=settings.log_file, use_color=True)
     log = get_logger(__name__)
 
     sqlite = SQLiteManager(
@@ -64,18 +67,34 @@ async def _bootstrap() -> BotDependencies:
     # do python-telegram-bot. Fazê-lo aqui criaria a aiohttp.ClientSession no
     # loop de bootstrap (que será fechado), causando "Event loop is closed".
 
+    reminders = ReminderManager(sqlite=sqlite)
+
     registry = ToolRegistry()
     web_search.register(registry)
+    reminder_tools.register(registry, manager=reminders)
 
     transcriber: WhisperTranscriber | None = None
+    openai_chat: OpenAIChatClient | None = None
     if settings.openai_api_key:
         transcriber = WhisperTranscriber(
             api_key=settings.openai_api_key,
             api_base=settings.openai_api_base,
             model=settings.openai_whisper_model,
         )
+        if settings.openai_chat_fallback_model:
+            openai_chat = OpenAIChatClient(
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+            )
+            log.info(
+                "Fallback OpenAI ativo: modelo=%s",
+                settings.openai_chat_fallback_model,
+            )
     else:
-        log.warning("OPENAI_API_KEY ausente — transcrição de áudio desativada.")
+        log.warning("OPENAI_API_KEY ausente — transcrição de áudio e fallback OpenAI desativados.")
+
+    if settings.chat_fallback_models:
+        log.info("Fallback Ollama: %s", ", ".join(settings.chat_fallback_models))
 
     return BotDependencies(
         settings=settings,
@@ -86,19 +105,19 @@ async def _bootstrap() -> BotDependencies:
         intent=intent,
         rag=rag,
         tools=registry,
+        reminders=reminders,
         transcriber=transcriber,
+        openai_chat=openai_chat,
     )
 
 
 def main() -> None:
-    deps = asyncio.run(_bootstrap())
-    app = build_application(deps)
-    if sys == 'win32':
+    if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    try:
-        asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    deps = loop.run_until_complete(_bootstrap())
+    app = build_application(deps)
     app.run_polling(allowed_updates=None)
 
 

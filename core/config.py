@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +26,28 @@ class Settings(BaseSettings):
     ollama_default_model: str = Field(default="gemma:2b")
     ollama_embedding_model: str = Field(default="nomic-embed-text")
     ollama_request_timeout_s: int = Field(default=300)
+
+    # Fallback chain quando o modelo principal falha (ex.: cloud sem quota, 500).
+    # CSV no .env: CHAT_FALLBACK_MODELS=translategemma:4b,gemma:2b
+    chat_fallback_models: list[str] = Field(
+        default_factory=list,
+        description="Modelos Ollama tentados em sequência se o principal falhar.",
+    )
+    # Último recurso: usa a chave OpenAI (mesma do Whisper) com este modelo.
+    # Vazio = OpenAI fica desligado como fallback de chat.
+    openai_chat_fallback_model: str = Field(
+        default="",
+        description="Ex.: 'gpt-4o-mini'. Vazio desliga o fallback OpenAI.",
+    )
+
+    @field_validator("chat_fallback_models", mode="before")
+    @classmethod
+    def _split_csv(cls, v):  # type: ignore[no-untyped-def]
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
 
     openai_api_key: str = Field(
         default="",

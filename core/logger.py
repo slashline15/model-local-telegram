@@ -6,53 +6,111 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from core.log_context import get_run_id
+
 _CONFIGURED: bool = False
 
-_RESET = "\x1b[0m"
-_COLORS: dict[str, str] = {
-    "DEBUG":    "\x1b[36m",   # ciano
-    "INFO":     "\x1b[37m",   # branco
-    "WARNING":  "\x1b[33m",   # amarelo
-    "ERROR":    "\x1b[31m",   # vermelho
-    "CRITICAL": "\x1b[1;41m", # vermelho fundo
-}
+
+def _should_use_color() -> bool:
+    """Determina se cores devem ser usadas na saída."""
+    if os.environ.get("NO_COLOR") not in (None, ""):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
+        return True
+    term = os.environ.get("TERM", "").lower()
+    color_terms = {"xterm", "xterm-256color", "screen", "tmux", "linux", "rxvt"}
+    if term in color_terms:
+        return True
+    if os.environ.get("TERM_PROGRAM") == "vscode":
+        return True
+    return False
 
 
-class _ColorFormatter(logging.Formatter):
-    """Formato compacto e colorido quando saída é TTY."""
+class _RunIdFilter(logging.Filter):
+    """Injeta o run_id corrente no record para uso no formatter."""
 
-    _USE_COLOR: bool = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
-
-    def format(self, record: logging.LogRecord) -> str:
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.run_id = get_run_id()
         record.short_name = record.name.replace("__main__", "main")
-        text = super().format(record)
-        if not self._USE_COLOR:
-            return text
-        color = _COLORS.get(record.levelname, "")
-        return f"{color}{text}{_RESET}" if color else text
+        return True
 
 
-def setup_logging(level: str = "INFO", log_file: Path | None = None) -> None:
+def _ensure_utf8_stdout() -> None:
+    """Console do Windows é cp1252 por padrão — Unicode (│, →, emojis) quebra.
+
+    Reconfigura stdout/stderr para utf-8 quando possível. Idempotente.
+    """
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
+def _build_console_handler(use_color: bool) -> logging.Handler:
+    if use_color:
+        try:
+            from rich.console import Console
+            from rich.logging import RichHandler
+
+            console = Console(
+                file=sys.stdout,
+                force_terminal=True,
+                soft_wrap=False,
+            )
+            handler: logging.Handler = RichHandler(
+                console=console,
+                show_time=True,
+                show_level=True,
+                show_path=False,
+                rich_tracebacks=True,
+                markup=False,
+                log_time_format="%H:%M:%S",
+                omit_repeated_times=False,
+            )
+            handler.setFormatter(
+                logging.Formatter(fmt="%(run_id)s | %(short_name)-22s | %(message)s")
+            )
+            return handler
+        except ImportError:
+            pass
+
+    handler = logging.StreamHandler(stream=sys.stdout)
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s.%(msecs)03d | %(levelname)-7s | %(run_id)s | "
+            "%(short_name)-22s | %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    return handler
+
+
+def setup_logging(
+    level: str = "INFO",
+    log_file: Path | None = None,
+    use_color: bool | None = None,
+) -> None:
     """Configura o logger raiz uma única vez (idempotente)."""
     global _CONFIGURED
     if _CONFIGURED:
         return
 
+    _ensure_utf8_stdout()
+    color = use_color if use_color is not None else _should_use_color()
+
     root = logging.getLogger()
     root.setLevel(level.upper())
+    root.addFilter(_RunIdFilter())
 
-    console_fmt = _ColorFormatter(
-        fmt="%(asctime)s.%(msecs)03d │ %(levelname)-7s │ %(short_name)-22s │ %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    file_fmt = logging.Formatter(
-        fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    stream_handler = logging.StreamHandler(stream=sys.stdout)
-    stream_handler.setFormatter(console_fmt)
-    root.addHandler(stream_handler)
+    console_handler = _build_console_handler(color)
+    console_handler.addFilter(_RunIdFilter())
+    root.addHandler(console_handler)
 
     if log_file is not None:
         log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -62,7 +120,13 @@ def setup_logging(level: str = "INFO", log_file: Path | None = None) -> None:
             backupCount=3,
             encoding="utf-8",
         )
-        file_handler.setFormatter(file_fmt)
+        file_handler.setFormatter(
+            logging.Formatter(
+                fmt="%(asctime)s | %(levelname)-8s | %(run_id)s | %(name)s | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        file_handler.addFilter(_RunIdFilter())
         root.addHandler(file_handler)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
