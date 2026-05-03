@@ -1,3 +1,5 @@
+# database/faiss_mgr.py
+
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +16,8 @@ log = get_logger(__name__)
 
 
 class FaissManager:
-    """Índice FAISS persistido em disco com mapeamento posição→sqlite_id.
+    """
+    Índice FAISS persistido em disco com mapeamento posição→sqlite_id.
 
     Usa IndexIDMap2 sobre IndexFlatIP (similaridade por produto interno em
     vetores normalizados ⇒ cosseno). Toda I/O pesada roda em executor.

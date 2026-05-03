@@ -7,6 +7,7 @@ from core.audio_transcriber import WhisperTranscriber
 from core.config import get_settings
 from core.logger import get_logger, setup_logging
 from core.reminders import ReminderManager
+from database.backup import create_backup
 from database.faiss_mgr import FaissManager
 from database.sqlite_mgr import SQLiteManager
 from llm.contrastive_rag import ContrastiveRAG
@@ -26,6 +27,13 @@ async def _bootstrap() -> BotDependencies:
     settings = get_settings()
     setup_logging(level=settings.log_level, log_file=settings.log_file, use_color=True)
     log = get_logger(__name__)
+
+    if settings.sqlite_backup_enabled:
+        create_backup(
+            settings.sqlite_path,
+            settings.sqlite_backup_dir,
+            max_keep=settings.sqlite_backup_max_keep,
+        )
 
     sqlite = SQLiteManager(
         db_path=settings.sqlite_path,
@@ -80,6 +88,8 @@ async def _bootstrap() -> BotDependencies:
             api_key=settings.openai_api_key,
             api_base=settings.openai_api_base,
             model=settings.openai_whisper_model,
+            timeout_s=settings.openai_whisper_timeout_s,
+            max_size_mb=settings.whisper_max_mb,
         )
         if settings.openai_chat_fallback_model:
             openai_chat = OpenAIChatClient(

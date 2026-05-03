@@ -23,9 +23,17 @@ from agents.router import AgentRouter
 from core.chat_runner import ChatRunResult, run_chat_with_fallback
 from core.codes import format_hashtag, parse_code
 from core.logger import get_logger
+from core.permissions import (
+    GLOBAL_ROLE_ADMIN,
+    GLOBAL_ROLE_MEMBER,
+    GLOBAL_ROLE_SUPERADMIN,
+    default_member_permissions,
+    project_role_implies_global_role,
+)
 from core.pipeline import PipelineRecorder
 from llm.contrastive_rag import RagBundle
 from llm.ollama_client import ChatMessage, ChatResult
+from tg.middleware import require_active_user
 
 if TYPE_CHECKING:
     from tg.bot import BotDependencies
@@ -52,6 +60,14 @@ _TOOL_LOOP_MAX_ITER: int = 3
 _EMBED_INPUT_MAX_CHARS: int = 3000
 # Classificação e tagging só precisam dos primeiros ~2k chars para decidir.
 _CLASSIFY_INPUT_MAX_CHARS: int = 2000
+
+
+def _file_too_big(size_bytes: int | None, limit_mb: int) -> tuple[bool, float]:
+    """Retorna (excede_limite, tamanho_em_mb). None ⇒ sem informação, deixa passar."""
+    if size_bytes is None:
+        return False, 0.0
+    mb = size_bytes / (1024 * 1024)
+    return mb > limit_mb, mb
 
 
 def _deps(context: ContextTypes.DEFAULT_TYPE) -> "BotDependencies":
@@ -145,44 +161,163 @@ async def _safe_reply(msg: Message, text: str, **kwargs: Any) -> Message:
 
 # ─────────────────────────── COMANDOS ───────────────────────────
 
+_WELCOME_TEXT: str = (
+    "Olá! Sou seu copiloto de obra.\n\n"
+    "Comandos principais:\n"
+    "/obras – suas obras\n"
+    "/obra #UID – escolher obra ativa\n"
+    "/criar_obra <nome> – criar obra (admins)\n"
+    "/invite <role> – gerar convite\n"
+    "/membros – membros da obra ativa\n\n"
+    "/help – lista completa"
+)
+
+
+def _telegram_display_name(update: Update) -> str:
+    u = update.effective_user
+    if u is None:
+        return "Usuário"
+    parts = [p for p in (u.first_name, u.last_name) if p]
+    return " ".join(parts) or (u.username or f"tg:{u.id}")
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_message is None:
+    """Saudação inicial OU consumo de deep-link de convite (`/start <token>`)."""
+    msg = update.effective_message
+    tg_user = update.effective_user
+    if msg is None or tg_user is None:
         return
-    await update.effective_message.reply_text(
-        "Olá! Eu aprendo com seu feedback (Contrastive RAG).\n\n"
-        "Envie texto, imagem, documento ou áudio. Após cada resposta, "
-        "use as estrelas (⭐ 1 a ⭐ 5) para me ensinar.\n\n"
-        "Comandos:\n"
-        "/help   – lista de comandos\n"
-        "/config – modelo + temperatura\n"
-        "/stats  – estatísticas do banco\n"
-        "/recall – ver o que o RAG recuperaria\n"
-        "/history – suas últimas interações\n"
-        "/reminders – seus lembretes pendentes\n"
-        "/ping   – health-check do Ollama\n"
-        "/whoami – seus dados\n"
-        "/reset  – restaurar configurações padrão"
+
+    deps = _deps(context)
+    token = (context.args or [None])[0]
+
+    # ─── Caminho A: deep link com token de convite ───
+    if token:
+        await _consume_invite(update, context, token=token)
+        return
+
+    # ─── Caminho B: /start sem token ───
+    existing = await deps.sqlite.users.get_by_telegram_id(tg_user.id)
+
+    if existing is None:
+        bootstrap_id = deps.settings.bootstrap_superadmin_telegram_id
+        if bootstrap_id and bootstrap_id == tg_user.id:
+            await deps.sqlite.users.register(
+                telegram_id=tg_user.id,
+                name=_telegram_display_name(update),
+                role=GLOBAL_ROLE_SUPERADMIN,
+            )
+            log.warning("Bootstrap: %s promovido a superadmin.", tg_user.id)
+            await msg.reply_text(
+                "🎖 Você foi registrado como <b>superadmin</b>. "
+                "Use /criar_obra pra começar.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        await msg.reply_text(
+            "👋 Você ainda não está cadastrado. Peça um convite ao admin "
+            "da obra e abra o link recebido."
+        )
+        return
+
+    await msg.reply_text(_WELCOME_TEXT)
+
+
+async def _consume_invite(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, *, token: str,
+) -> None:
+    msg = update.effective_message
+    tg_user = update.effective_user
+    assert msg is not None and tg_user is not None
+    deps = _deps(context)
+
+    invite = await deps.sqlite.invites.get_by_token(token)
+    if invite is None:
+        await msg.reply_text("Convite inválido. Peça outro ao admin.")
+        return
+    if invite.used_at is not None:
+        await msg.reply_text("Esse convite já foi usado.")
+        return
+    if invite.project_id is None:
+        # Convite de plataforma (sem obra) — ainda não suportado nesta versão.
+        await msg.reply_text("Convite mal-formado: sem obra associada.")
+        return
+
+    # Garante user cadastrado (idempotente via ON CONFLICT).
+    user = await deps.sqlite.users.register(
+        telegram_id=tg_user.id,
+        name=_telegram_display_name(update),
+        invited_by=invite.created_by,
+    )
+
+    # Consumo atômico: se outro user já marcou, retorna False.
+    consumed = await deps.sqlite.invites.mark_used(invite.id, used_by=user.id)
+    if not consumed:
+        await msg.reply_text("Esse convite acabou de ser usado por outra pessoa.")
+        return
+
+    # Permissões padrão pelo role do convite.
+    perms = default_member_permissions(invite.role)
+    await deps.sqlite.members.add(
+        project_id=invite.project_id,
+        user_id=user.id,
+        role=invite.role,
+        invite_id=invite.id,
+        **perms,
+    )
+
+    # Eleva role global se o convite for de admin de obra.
+    new_global = project_role_implies_global_role(invite.role)
+    if new_global and user.role == GLOBAL_ROLE_MEMBER:
+        await deps.sqlite.users.update_role(user.id, new_global)
+
+    # Convite com role 'admin' transfere o admin_id da obra.
+    if invite.role == "admin":
+        await deps.sqlite.projects.set_admin(invite.project_id, user.id)
+
+    # Define a obra como ativa do recém-chegado.
+    await deps.sqlite.settings.set_current_project(tg_user.id, invite.project_id)
+
+    project = await deps.sqlite.projects.get_by_id(invite.project_id)
+    proj_name = project.name if project else "?"
+    proj_uid = project.uid if project else "?"
+
+    await msg.reply_text(
+        f"✅ Bem-vindo! Você entrou em <b>{escape(proj_name)}</b> "
+        f"<code>#{escape(proj_uid)}</code> como <i>{escape(invite.role)}</i>.\n\n"
+        f"{_WELCOME_TEXT}",
+        parse_mode=ParseMode.HTML,
     )
 
 
+@require_active_user
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None:
         return
     await update.effective_message.reply_text(
-        "/start    – mensagem inicial\n"
+        "<b>Obras & convites</b>\n"
+        "/obras            – suas obras\n"
+        "/obra #UID        – escolher obra ativa\n"
+        "/obra             – ver obra ativa\n"
+        "/criar_obra <nome> – criar obra (admin global)\n"
+        "/invite <role>    – convidar pra obra ativa\n"
+        "/membros          – membros da obra ativa\n\n"
+        "<b>Conversa</b>\n"
         "/config   – modelo + temperatura\n"
         "/stats    – estatísticas globais\n"
-        "/recall <texto>   – debug do RAG (top hits)\n"
-        "/recall #i<id>    – abre uma interação pelo código\n"
-        "/history [n]      – últimas n interações suas (default 5)\n"
-        "/reminders        – seus lembretes pendentes (com cancelar)\n"
-        "/ping     – health-check Ollama (modelos + dim do embedding)\n"
-        "/whoami   – seu user_id e configuração ativa\n"
-        "/reset    – volta sua configuração ao padrão\n\n"
-        "Mande texto / foto / documento / áudio para conversar."
+        "/recall &lt;texto&gt; – debug do RAG\n"
+        "/recall #i&lt;id&gt;   – abre interação\n"
+        "/history [n]      – suas n últimas interações\n"
+        "/reminders        – seus lembretes\n"
+        "/ping     – health Ollama\n"
+        "/whoami   – seu cadastro\n"
+        "/reset    – config ao padrão\n\n"
+        "Mande texto / foto / documento / áudio.",
+        parse_mode=ParseMode.HTML,
     )
 
 
+@require_active_user
 async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
@@ -223,6 +358,7 @@ async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+@require_active_user
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None:
         return
@@ -289,6 +425,7 @@ async def _show_interaction_by_code(
     await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+@require_active_user
 async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
@@ -361,6 +498,7 @@ async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+@require_active_user
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
@@ -392,6 +530,7 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+@require_active_user
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None:
         return
@@ -416,6 +555,7 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+@require_active_user
 async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
@@ -434,6 +574,7 @@ async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+@require_active_user
 async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
@@ -470,6 +611,7 @@ async def cmd_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+@require_active_user
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
@@ -484,6 +626,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ─────────────────────────── MENSAGENS ───────────────────────────
 
+@require_active_user
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     user = update.effective_user
@@ -497,6 +640,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+@require_active_user
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     user = update.effective_user
@@ -505,9 +649,22 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     deps = _deps(context)
     photo = msg.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
-    target = deps.settings.media_dir / f"{uuid.uuid4().hex}.jpg"
-    await file.download_to_drive(custom_path=str(target))
+    too_big, mb = _file_too_big(photo.file_size, deps.settings.telegram_download_max_mb)
+    if too_big:
+        await msg.reply_text(
+            f"⚠️ Imagem com {mb:.1f} MB excede o limite do Telegram bot API "
+            f"({deps.settings.telegram_download_max_mb} MB). Reduza o tamanho."
+        )
+        return
+
+    try:
+        file = await context.bot.get_file(photo.file_id)
+        target = deps.settings.media_dir / f"{uuid.uuid4().hex}.jpg"
+        await file.download_to_drive(custom_path=str(target))
+    except BadRequest as exc:
+        log.warning("Falha ao baixar foto: %s", exc)
+        await msg.reply_text(f"⚠️ Não consegui baixar essa imagem: {exc}")
+        return
     log.info("📷 Foto baixada: %s (%d bytes)", target.name, target.stat().st_size)
 
     user_settings = await deps.sqlite.get_user_settings(user.id)
@@ -533,6 +690,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+@require_active_user
 async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     user = update.effective_user
@@ -541,11 +699,25 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     deps = _deps(context)
     doc = msg.document
-    file = await context.bot.get_file(doc.file_id)
-    safe_name = (doc.file_name or f"{uuid.uuid4().hex}.bin").replace("/", "_")
-    target = deps.settings.media_dir / f"{uuid.uuid4().hex}_{safe_name}"
-    await file.download_to_drive(custom_path=str(target))
-    log.info("📎 Documento baixado: %s", target.name)
+    too_big, mb = _file_too_big(doc.file_size, deps.settings.telegram_download_max_mb)
+    if too_big:
+        await msg.reply_text(
+            f"⚠️ Documento com {mb:.1f} MB excede o limite do Telegram bot API "
+            f"({deps.settings.telegram_download_max_mb} MB). "
+            f"Quebre em partes menores ou compartilhe por outro canal."
+        )
+        return
+
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        safe_name = (doc.file_name or f"{uuid.uuid4().hex}.bin").replace("/", "_")
+        target = deps.settings.media_dir / f"{uuid.uuid4().hex}_{safe_name}"
+        await file.download_to_drive(custom_path=str(target))
+    except BadRequest as exc:
+        log.warning("Falha ao baixar documento: %s", exc)
+        await msg.reply_text(f"⚠️ Não consegui baixar o documento: {exc}")
+        return
+    log.info("📎 Documento baixado: %s (%d bytes)", target.name, target.stat().st_size)
 
     extracted = _extract_document_text(target).strip()
     truncated = False
@@ -576,6 +748,7 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+@require_active_user
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     user = update.effective_user
@@ -593,11 +766,35 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if voice_or_audio is None:
         return
 
-    file = await context.bot.get_file(voice_or_audio.file_id)
-    suffix = ".ogg" if msg.voice is not None else ".mp3"
-    target: Path = deps.settings.media_dir / f"{uuid.uuid4().hex}{suffix}"
-    await file.download_to_drive(custom_path=str(target))
-    log.info("🎤 Áudio baixado: %s", target.name)
+    # 1) Limite do Telegram bot API (download via getFile).
+    tg_limit = deps.settings.telegram_download_max_mb
+    too_big, mb = _file_too_big(voice_or_audio.file_size, tg_limit)
+    if too_big:
+        await msg.reply_text(
+            f"⚠️ Áudio com {mb:.1f} MB excede o limite do Telegram bot API "
+            f"({tg_limit} MB). Mande em partes menores."
+        )
+        return
+
+    # 2) Limite do Whisper (transcrição).
+    whisper_limit = deps.settings.whisper_max_mb
+    if voice_or_audio.file_size and voice_or_audio.file_size > whisper_limit * 1024 * 1024:
+        await msg.reply_text(
+            f"⚠️ Áudio com {mb:.1f} MB excede o limite do Whisper "
+            f"({whisper_limit} MB). Quebre em partes menores."
+        )
+        return
+
+    try:
+        file = await context.bot.get_file(voice_or_audio.file_id)
+        suffix = ".ogg" if msg.voice is not None else ".mp3"
+        target: Path = deps.settings.media_dir / f"{uuid.uuid4().hex}{suffix}"
+        await file.download_to_drive(custom_path=str(target))
+    except BadRequest as exc:
+        log.warning("Falha ao baixar áudio: %s", exc)
+        await msg.reply_text(f"⚠️ Não consegui baixar o áudio: {exc}")
+        return
+    log.info("🎤 Áudio baixado: %s (%d bytes)", target.name, target.stat().st_size)
 
     await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
 
@@ -795,8 +992,9 @@ async def _process_user_input(
                 media_type=media_type,
                 error=None,
                 run_id=rec.run.run_id,
+                project_id=user_settings.current_project_id,
             )
-            s.set(interaction_id=interaction_id)
+            s.set(interaction_id=interaction_id, project_id=user_settings.current_project_id)
 
         async with rec.step("index_interaction_embedding") as s:
             raw_embed_text = f"USER: {text}\nBOT: {answer}"

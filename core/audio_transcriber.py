@@ -1,3 +1,5 @@
+# core/audio_transcriber.py
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,7 +23,8 @@ class WhisperTranscriber:
         api_key: str,
         api_base: str = "https://api.openai.com/v1",
         model: str = "whisper-1",
-        timeout_s: int = 120,
+        timeout_s: int = 600,
+        max_size_mb: int = 25,
     ) -> None:
         if not api_key:
             raise ConfigError("OPENAI_API_KEY ausente — necessária para transcrição.")
@@ -29,6 +32,7 @@ class WhisperTranscriber:
         self._endpoint: str = f"{api_base.rstrip('/')}/audio/transcriptions"
         self._model: str = model
         self._timeout: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=timeout_s)
+        self._max_bytes: int = max_size_mb * 1024 * 1024
 
     async def transcribe(
         self,
@@ -38,6 +42,15 @@ class WhisperTranscriber:
     ) -> str:
         if not audio_path.exists():
             raise TranscriptionError(f"Arquivo de áudio não encontrado: {audio_path}")
+
+        size = audio_path.stat().st_size
+        if size > self._max_bytes:
+            mb = size / (1024 * 1024)
+            limit_mb = self._max_bytes / (1024 * 1024)
+            raise TranscriptionError(
+                f"Áudio com {mb:.1f} MB excede o limite do Whisper "
+                f"({limit_mb:.0f} MB). Quebre o áudio antes de enviar."
+            )
 
         headers = {"Authorization": f"Bearer {self._api_key}"}
 

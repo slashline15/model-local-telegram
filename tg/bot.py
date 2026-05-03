@@ -1,13 +1,17 @@
+# tg/bot.py
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from telegram import BotCommand
+from telegram import BotCommand, Update
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     Application,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
+    ContextTypes,
     MessageHandler,
     filters,
 )
@@ -23,7 +27,7 @@ from llm.intent_classifier import IntentClassifier
 from llm.ollama_client import OllamaClient
 from llm.openai_chat_client import OpenAIChatClient
 from llm.tag_generator import TagGenerator
-from tg import callbacks, handlers
+from tg import callbacks, handlers, handlers_projects, handlers_rdo
 from tools.registry import ToolRegistry
 
 log = get_logger(__name__)
@@ -45,40 +49,70 @@ class BotDependencies:
 
 
 _BOT_COMMANDS: list[BotCommand] = [
-    BotCommand("start",   "saudação inicial"),
-    BotCommand("help",    "lista de comandos"),
-    BotCommand("config",  "modelo + temperatura"),
-    BotCommand("stats",   "estatísticas globais"),
-    BotCommand("recall",  "debug do RAG (top hits)"),
-    BotCommand("history", "suas últimas interações"),
-    BotCommand("ping",    "health-check do Ollama"),
-    BotCommand("whoami",  "seu user_id e config"),
-    BotCommand("reset",     "voltar config ao padrão"),
-    BotCommand("reminders", "seus lembretes pendentes"),
+    BotCommand("start",      "saudação / consumir convite"),
+    BotCommand("help",       "lista de comandos"),
+    BotCommand("obras",      "suas obras"),
+    BotCommand("obra",       "obra ativa (sem args = mostra)"),
+    BotCommand("criar_obra", "criar obra (admin)"),
+    BotCommand("invite",     "gerar convite pra obra ativa"),
+    BotCommand("membros",    "membros da obra ativa"),
+    BotCommand("funcoes",    "catálogo de funções"),
+    BotCommand("empresas",   "empresas da obra ativa"),
+    BotCommand("empresa",    "empresa add Nome; CNPJ; own|third"),
+    BotCommand("colabs",     "colaboradores [função]"),
+    BotCommand("colab",      "colab add Nome; Função; Empresa"),
+    BotCommand("config",     "modelo + temperatura"),
+    BotCommand("stats",      "estatísticas globais"),
+    BotCommand("recall",     "debug do RAG (top hits)"),
+    BotCommand("history",    "suas últimas interações"),
+    BotCommand("ping",       "health-check do Ollama"),
+    BotCommand("whoami",     "seu user_id e config"),
+    BotCommand("reset",      "voltar config ao padrão"),
+    BotCommand("reminders",  "seus lembretes pendentes"),
 ]
 
 
 def build_application(deps: BotDependencies) -> Application:
+    s = deps.settings
     app: Application = (
         ApplicationBuilder()
-        .token(deps.settings.telegram_bot_token)
+        .token(s.telegram_bot_token)
+        .read_timeout(s.telegram_read_timeout_s)
+        .write_timeout(s.telegram_write_timeout_s)
+        .connect_timeout(s.telegram_connect_timeout_s)
+        .pool_timeout(s.telegram_pool_timeout_s)
+        .media_write_timeout(s.telegram_media_write_timeout_s)
+        .get_updates_read_timeout(s.telegram_get_updates_read_timeout_s)
         .post_init(_on_post_init)
         .post_shutdown(_on_post_shutdown)
         .build()
     )
 
     app.bot_data["deps"] = deps
+    app.add_error_handler(_on_error)
 
-    app.add_handler(CommandHandler("start",   handlers.cmd_start))
-    app.add_handler(CommandHandler("help",    handlers.cmd_help))
-    app.add_handler(CommandHandler("config",  handlers.cmd_config))
-    app.add_handler(CommandHandler("stats",   handlers.cmd_stats))
-    app.add_handler(CommandHandler("recall",  handlers.cmd_recall))
-    app.add_handler(CommandHandler("history", handlers.cmd_history))
-    app.add_handler(CommandHandler("ping",    handlers.cmd_ping))
-    app.add_handler(CommandHandler("whoami",  handlers.cmd_whoami))
-    app.add_handler(CommandHandler("reset",   handlers.cmd_reset))
-    app.add_handler(CommandHandler("reminders", handlers.cmd_reminders))
+    app.add_handler(CommandHandler("start",      handlers.cmd_start))
+    app.add_handler(CommandHandler("help",       handlers.cmd_help))
+    app.add_handler(CommandHandler("config",     handlers.cmd_config))
+    app.add_handler(CommandHandler("stats",      handlers.cmd_stats))
+    app.add_handler(CommandHandler("recall",     handlers.cmd_recall))
+    app.add_handler(CommandHandler("history",    handlers.cmd_history))
+    app.add_handler(CommandHandler("ping",       handlers.cmd_ping))
+    app.add_handler(CommandHandler("whoami",     handlers.cmd_whoami))
+    app.add_handler(CommandHandler("reset",      handlers.cmd_reset))
+    app.add_handler(CommandHandler("reminders",  handlers.cmd_reminders))
+
+    app.add_handler(CommandHandler("criar_obra", handlers_projects.cmd_criar_obra))
+    app.add_handler(CommandHandler("obras",      handlers_projects.cmd_obras))
+    app.add_handler(CommandHandler("obra",       handlers_projects.cmd_obra))
+    app.add_handler(CommandHandler("invite",     handlers_projects.cmd_invite))
+    app.add_handler(CommandHandler("membros",    handlers_projects.cmd_membros))
+
+    app.add_handler(CommandHandler("funcoes",    handlers_rdo.cmd_funcoes))
+    app.add_handler(CommandHandler("empresas",   handlers_rdo.cmd_empresas))
+    app.add_handler(CommandHandler("empresa",    handlers_rdo.cmd_empresa))
+    app.add_handler(CommandHandler("colabs",     handlers_rdo.cmd_colabs))
+    app.add_handler(CommandHandler("colab",      handlers_rdo.cmd_colab))
 
     app.add_handler(MessageHandler(filters.PHOTO, handlers.on_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handlers.on_voice))
@@ -150,3 +184,22 @@ async def _on_post_shutdown(app: Application) -> None:
     if deps.openai_chat is not None:
         await deps.openai_chat.close()
     log.info("Bot finalizado.")
+
+
+async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Error handler global: loga curto e tenta avisar o usuário sem propagar."""
+    err = context.error
+    # Ruído de polling: o PTB já retenta sozinho — só logamos como warning.
+    if isinstance(err, (NetworkError, TimedOut)):
+        log.warning("Rede instável (%s): %s", type(err).__name__, err)
+        return
+
+    log.error("Erro não tratado em handler: %s", err, exc_info=err)
+    if isinstance(update, Update) and update.effective_message is not None:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ Erro técnico ao processar isso. Tenta de novo daqui a pouco — "
+                "se persistir, me avise."
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Falha ao notificar usuário sobre erro: %s", exc)

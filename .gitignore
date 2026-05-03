@@ -13,3 +13,4 @@ data/
 # arquivos temporários gerados pelo terminal
 2026-*-local-command-caveatcaveat-*.txt
 assets/*
+docs/notes/*
