@@ -1,16 +1,69 @@
-.venv/
-__pycache__/
-*.pyc
+# --- Segredos e ambiente ---
 .env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+credentials/
+
+# --- Python: bytecode e caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+
+# --- Python: distribuição e build ---
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- Dados do bot (DB, índices, mídia, logs, backups) ---
 data/
 *.log
-.DS_Store
-*.excalidraw
-.claude/
-.idea/
+*.log.*
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- Editores e SOs ---
 .vscode/
+.idea/
 *.swp
-# arquivos temporários gerados pelo terminal
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Diretórios da Anthropic / Claude ---
+.claude/
+.anthropic/
+
+# --- Diagramas e notas locais ---
+*.excalidraw
+docs/notes/
+assets/
+
+# --- Temporários gerados pelo terminal ---
 2026-*-local-command-caveatcaveat-*.txt
-assets/*
-docs/notes/*
+*.tmp
+*.bak
