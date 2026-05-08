@@ -20,29 +20,37 @@ from typing import Any, Iterable
 # `from database.sqlite_mgr import PipelineStepRow, Interaction, ...`).
 from database.models import (  # noqa: F401
     Colaborador,
+    DailyTokenRow,
     Empresa,
     Funcao,
     Interaction,
+    InteractionChunk,
     Invite,
+    ModelPricing,
     PipelineStepRow,
     Project,
     ProjectMember,
     Reminder,
     StatsSnapshot,
+    TokenUsageRow,
+    TokenUsageSummary,
     User,
     UserSettings,
 )
 from database.repos import (
+    ChunksRepo,
     ColaboradoresRepo,
     EmpresasRepo,
     FuncoesRepo,
     InteractionsRepo,
     InvitesRepo,
     MembersRepo,
+    ModelPricingRepo,
     PipelineRepo,
     ProjectsRepo,
     RemindersRepo,
     SettingsRepo,
+    TokenUsageRepo,
     UsersRepo,
 )
 from database.schema import init_schema as _init_schema
@@ -69,6 +77,9 @@ class SQLiteManager:
         self.funcoes = FuncoesRepo(db_path)
         self.empresas = EmpresasRepo(db_path)
         self.colaboradores = ColaboradoresRepo(db_path)
+        self.chunks = ChunksRepo(db_path)
+        self.token_usage = TokenUsageRepo(db_path)
+        self.model_pricing = ModelPricingRepo(db_path)
 
     async def init_schema(self) -> None:
         await _init_schema(self._db_path)

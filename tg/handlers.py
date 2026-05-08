@@ -31,6 +31,7 @@ from core.permissions import (
     project_role_implies_global_role,
 )
 from core.pipeline import PipelineRecorder
+from database.repos.chunks import ChunkInsert
 from llm.contrastive_rag import RagBundle
 from llm.ollama_client import ChatMessage, ChatResult
 from tg.middleware import require_active_user
@@ -61,6 +62,36 @@ _EMBED_INPUT_MAX_CHARS: int = 3000
 # Classificação e tagging só precisam dos primeiros ~2k chars para decidir.
 _CLASSIFY_INPUT_MAX_CHARS: int = 2000
 
+# ─── Chunking ───────────────────────────────────────────────────────────────
+# Pesos por classe de documento (conforme Hierarquia de documentos.md).
+_CLASS_WEIGHTS: dict[str, float] = {
+    "contract": 1.5,
+    "spec":     1.4,
+    "norm":     1.3,
+    "proposal": 1.1,
+    "note":     1.0,
+    "other":    0.8,
+    "meeting":  0.7,
+}
+
+# Mapa de hashtags de caption para doc_class.
+_CAPTION_CLASS_MAP: dict[str, str] = {
+    "#contrato":      "contract",  "#aditivo":       "contract",
+    "#memorial":      "spec",      "#projeto":        "spec",      "#especificacao": "spec",
+    "#norma":         "norm",      "#nr":             "norm",
+    "#proposta":      "proposal",  "#escopo":         "proposal",
+    "#nota":          "note",      "#anotacao":       "note",
+    "#reuniao":       "meeting",   "#ata":            "meeting",
+}
+
+# Boost por role global (nível de acesso conforme Níveis de acesso.md).
+_ROLE_BOOST: dict[str, float] = {
+    "superadmin": 0.2,
+    "admin":      0.2,
+    "engineer":   0.1,
+    "supervisor": 0.1,
+}
+
 
 def _file_too_big(size_bytes: int | None, limit_mb: int) -> tuple[bool, float]:
     """Retorna (excede_limite, tamanho_em_mb). None ⇒ sem informação, deixa passar."""
@@ -68,6 +99,35 @@ def _file_too_big(size_bytes: int | None, limit_mb: int) -> tuple[bool, float]:
         return False, 0.0
     mb = size_bytes / (1024 * 1024)
     return mb > limit_mb, mb
+
+
+def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
+    """Divide text em chunks sobrepostos. Retorna ao menos [text] se text for curto."""
+    if not text:
+        return []
+    if len(text) <= chunk_size:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        if end >= len(text):
+            break
+        start += chunk_size - overlap
+    return chunks
+
+
+def _parse_doc_class(caption: str) -> str:
+    """Extrai doc_class a partir de hashtags na caption. Fallback = 'note'."""
+    for tag, cls in _CAPTION_CLASS_MAP.items():
+        if tag in caption.lower():
+            return cls
+    return "note"
+
+
+def _sender_boost(role: str) -> float:
+    return _ROLE_BOOST.get(role, 0.0)
 
 
 def _deps(context: ContextTypes.DEFAULT_TYPE) -> "BotDependencies":
@@ -720,22 +780,22 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     log.info("📎 Documento baixado: %s (%d bytes)", target.name, target.stat().st_size)
 
     extracted = _extract_document_text(target).strip()
-    truncated = False
-    if len(extracted) > _DOC_MAX_CHARS:
-        extracted = extracted[: _DOC_MAX_CHARS]
-        truncated = True
-
+    # Não truncamos o texto de extração aqui — o chunking lida com documentos longos.
     user_caption = (msg.caption or "").strip()
+    doc_class = _parse_doc_class(user_caption)
+
     if extracted:
         log.info(
-            "📄 Texto extraído de %s: %d chars%s",
-            target.name, len(extracted), " (truncado)" if truncated else "",
+            "📄 Texto extraído de %s: %d chars (classe=%s)",
+            target.name, len(extracted), doc_class,
         )
         header = user_caption or f"Analise o documento anexado: {target.name}"
-        suffix = "\n[...conteúdo truncado...]" if truncated else ""
+        # Para o prompt LLM, mantemos o limite anterior.
+        extracted_for_prompt = extracted[:_DOC_MAX_CHARS]
+        suffix = "\n[...conteúdo truncado...]" if len(extracted) > _DOC_MAX_CHARS else ""
         body = (
             f"{header}\n\n"
-            f"[Conteúdo extraído de {target.name}]\n{extracted}{suffix}"
+            f"[Conteúdo extraído de {target.name}]\n{extracted_for_prompt}{suffix}"
         )
     else:
         body = user_caption or f"Documento recebido: {target.name}"
@@ -745,6 +805,8 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         chat_id=msg.chat_id, text=body,
         media_path=str(target), media_type="document",
         images_b64=None, forced_intent_hint=None,
+        full_doc_text=extracted or None,
+        doc_class=doc_class,
     )
 
 
@@ -829,6 +891,8 @@ async def _process_user_input(
     media_type: str,
     images_b64: list[str] | None,
     forced_intent_hint: str | None,
+    full_doc_text: str | None = None,   # texto completo do doc (para chunking)
+    doc_class: str = "note",            # classe do documento
 ) -> None:
     msg: Message | None = update.effective_message
     if msg is None:
@@ -864,12 +928,29 @@ async def _process_user_input(
             ir = await deps.intent.classify(classify_text, hint=forced_intent_hint)
             intent = ir.intent
             s.set(intent=ir.intent, confidence=round(ir.confidence, 3), reason=ir.reason[:80])
+            # Token tracking para classify_intent.
+            _prompt_tok = getattr(ir, "prompt_tokens", None) or (len(classify_text) // 4)
+            await deps.sqlite.token_usage.insert(
+                run_id=rec.run.run_id, user_id=user_id,
+                model=deps.settings.ollama_default_model, backend="ollama",
+                operation="classify_intent",
+                prompt_tokens=_prompt_tok, response_tokens=0,
+                project_id=None,  # settings ainda não carregado
+            )
 
         async with rec.step(
             "generate_tags", truncated=len(text) > _CLASSIFY_INPUT_MAX_CHARS
         ) as s:
             tags = await deps.tag_gen.generate(classify_text)
             s.set(tags=tags)
+            _tag_prompt_tok = len(classify_text) // 4
+            await deps.sqlite.token_usage.insert(
+                run_id=rec.run.run_id, user_id=user_id,
+                model=deps.settings.ollama_default_model, backend="ollama",
+                operation="generate_tags",
+                prompt_tokens=_tag_prompt_tok, response_tokens=0,
+                project_id=None,
+            )
 
         async with rec.step("route_agent", intent=intent, tags=tags) as s:
             decision = _AGENT_ROUTER.decide(tags + [intent])
@@ -970,6 +1051,18 @@ async def _process_user_input(
                 fell_back=run.fell_back,
                 primary_error=run.primary_error,
             )
+            # Token tracking para chat.
+            await deps.sqlite.token_usage.insert(
+                run_id=rec.run.run_id, user_id=user_id,
+                interaction_id=interaction_id,
+                project_id=user_settings.current_project_id if user_settings else None,
+                model=run.model_used or deps.settings.ollama_default_model,
+                backend=run.backend or "ollama",
+                operation="chat",
+                prompt_tokens=chat_result.prompt_tokens or 0,
+                response_tokens=chat_result.response_tokens or 0,
+                duration_ms=chat_result.total_duration_ms or 0,
+            )
 
         async with rec.step("save_interaction") as s:
             interaction_id = await deps.sqlite.insert_interaction(
@@ -997,23 +1090,63 @@ async def _process_user_input(
             s.set(interaction_id=interaction_id, project_id=user_settings.current_project_id)
 
         async with rec.step("index_interaction_embedding") as s:
-            raw_embed_text = f"USER: {text}\nBOT: {answer}"
-            embed_text = raw_embed_text[:_EMBED_INPUT_MAX_CHARS]
-            embed_truncated = len(raw_embed_text) > _EMBED_INPUT_MAX_CHARS
-            if embed_truncated:
-                log.info(
-                    "Embedding: input truncado %d → %d chars",
-                    len(raw_embed_text), _EMBED_INPUT_MAX_CHARS,
-                )
+            embed_model = deps.settings.ollama_embedding_model
+            chunk_size = deps.settings.chunk_size
+            chunk_overlap = deps.settings.chunk_overlap
+
+            # Texto base para embedding: prefer full doc text se disponível.
+            base_text = full_doc_text or f"USER: {text}\nBOT: {answer}"
+
+            # Determina peso para os chunks.
+            bot_user_obj = await deps.sqlite.users.get_by_id(user_id)
+            role = bot_user_obj.role if bot_user_obj else "worker"
+            boost = _sender_boost(role)
+            weight = _CLASS_WEIGHTS.get(doc_class, 1.0) * (1.0 + boost)
+
+            raw_chunks = _chunk_text(base_text, chunk_size, chunk_overlap)
+
             t0 = time.monotonic()
-            vec = await deps.ollama.embed(embed_text)
-            await deps.faiss.add(interaction_id, vec)
+            chunk_inserts: list[ChunkInsert] = []
+            vectors: list = []
+            for idx, chunk_text_item in enumerate(raw_chunks):
+                embed_input = chunk_text_item[:_EMBED_INPUT_MAX_CHARS]
+                vec = await deps.ollama.embed(embed_input)
+                vectors.append(vec)
+                chunk_inserts.append(
+                    ChunkInsert(
+                        chunk_idx=idx,
+                        content=chunk_text_item[:500],  # resumo do chunk no DB
+                        doc_class=doc_class,
+                        weight=weight,
+                    )
+                )
+
+            chunk_ids = await deps.sqlite.chunks.insert_many(
+                interaction_id, chunk_inserts
+            )
+            await deps.faiss.add_many(chunk_ids, vectors)
+
+            embed_ms = int((time.monotonic() - t0) * 1000)
+            # Token tracking para embedding.
+            total_embed_chars = sum(len(c.content) for c in chunk_inserts)
+            await deps.sqlite.token_usage.insert(
+                run_id=rec.run.run_id, user_id=user_id,
+                interaction_id=interaction_id,
+                project_id=user_settings.current_project_id if user_settings else None,
+                model=embed_model, backend="ollama",
+                operation="embedding",
+                prompt_tokens=total_embed_chars // 4, response_tokens=0,
+                duration_ms=embed_ms,
+                quantity_secondary=float(len(raw_chunks)),
+            )
+
             s.set(
-                embed_ms=int((time.monotonic() - t0) * 1000),
-                vec_dim=int(vec.shape[-1]),
+                embed_ms=embed_ms,
+                vec_dim=int(vectors[0].shape[-1]) if vectors else 0,
                 faiss_total=deps.faiss.ntotal,
-                input_chars=len(embed_text),
-                truncated=embed_truncated,
+                n_chunks=len(raw_chunks),
+                weight=round(weight, 3),
+                doc_class=doc_class,
             )
 
         async with rec.step("send_reply") as s:
@@ -1037,6 +1170,7 @@ async def _process_user_input(
             pass
 
     finally:
+        total_ms = rec.run.total_ms
         log.info("\n%s", rec.summary())
         try:
             await deps.sqlite.save_pipeline_steps(
@@ -1048,3 +1182,46 @@ async def _process_user_input(
             )
         except Exception as exc:  # noqa: BLE001
             log.error("Não foi possível persistir pipeline_steps: %s", exc)
+
+        # DebugNotifier.
+        if deps.debug_notifier is not None:
+            try:
+                proj_name: str | None = None
+                if user_settings and user_settings.current_project_id:
+                    proj = await deps.sqlite.projects.get_by_id(
+                        user_settings.current_project_id
+                    )
+                    proj_name = proj.name if proj else None
+                tg_user = getattr(update.effective_user, "first_name", None) or str(user_id)
+
+                if error_text:
+                    await deps.debug_notifier.notify_error(
+                        run_id=rec.run.run_id,
+                        user_name=tg_user,
+                        project_name=proj_name,
+                        error=error_text,
+                        duration_ms=total_ms,
+                    )
+                else:
+                    cost_usd = 0.0
+                    if chat_result is not None:
+                        cost_usd = await deps.sqlite.model_pricing.calc_cost(
+                            model=chat_result.model or deps.settings.ollama_default_model,
+                            prompt_tokens=chat_result.prompt_tokens or 0,
+                            response_tokens=chat_result.response_tokens or 0,
+                        )
+                    await deps.debug_notifier.notify_pipeline_run(
+                        run_id=rec.run.run_id,
+                        user_name=tg_user,
+                        project_name=proj_name,
+                        model=chat_result.model if chat_result else deps.settings.ollama_default_model,
+                        backend="ollama",
+                        intent=intent,
+                        tags=tags,
+                        prompt_tokens=chat_result.prompt_tokens or 0 if chat_result else 0,
+                        response_tokens=chat_result.response_tokens or 0 if chat_result else 0,
+                        cost_usd=cost_usd,
+                        duration_ms=total_ms,
+                    )
+            except Exception as notify_exc:  # noqa: BLE001
+                log.warning("DebugNotifier falhou: %s", notify_exc)

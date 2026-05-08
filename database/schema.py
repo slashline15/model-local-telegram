@@ -193,6 +193,56 @@ CREATE TABLE IF NOT EXISTS colaboradores (
 );
 """
 
+_INTERACTION_CHUNKS_BASE: str = """
+CREATE TABLE IF NOT EXISTS interaction_chunks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    interaction_id  INTEGER NOT NULL REFERENCES interactions(id),
+    chunk_idx       INTEGER NOT NULL,
+    content         TEXT    NOT NULL,
+    doc_class       TEXT    NOT NULL DEFAULT 'note',
+    weight          REAL    NOT NULL DEFAULT 1.0,
+    created_at      TEXT    NOT NULL
+);
+"""
+
+_TOKEN_USAGE_BASE: str = """
+CREATE TABLE IF NOT EXISTS token_usage (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id              TEXT    NOT NULL,
+    interaction_id      INTEGER REFERENCES interactions(id),
+    user_id             INTEGER NOT NULL,
+    project_id          INTEGER,
+    model               TEXT    NOT NULL,
+    backend             TEXT    NOT NULL DEFAULT 'ollama',
+    operation           TEXT    NOT NULL,
+    prompt_tokens       INTEGER NOT NULL DEFAULT 0,
+    response_tokens     INTEGER NOT NULL DEFAULT 0,
+    total_tokens        INTEGER NOT NULL DEFAULT 0,
+    duration_ms         INTEGER NOT NULL DEFAULT 0,
+    quantity_secondary  REAL    DEFAULT 0,
+    created_at          TEXT    NOT NULL
+);
+"""
+
+_MODEL_PRICING_BASE: str = """
+CREATE TABLE IF NOT EXISTS model_pricing (
+    model              TEXT    PRIMARY KEY,
+    backend            TEXT    NOT NULL,
+    cost_per_1k_input  REAL    DEFAULT 0,
+    cost_per_1k_output REAL    DEFAULT 0,
+    currency           TEXT    DEFAULT 'USD',
+    updated_at         TEXT    NOT NULL
+);
+"""
+
+_MODEL_PRICING_SEED: tuple[tuple[str, str, float, float, str], ...] = (
+    ("gemma4:31b-cloud",       "ollama", 0,       0,      "USD"),
+    ("llama3.2:3b",            "ollama", 0,       0,      "USD"),
+    ("nomic-embed-text:v1.5",  "ollama", 0,       0,      "USD"),
+    ("gpt-4o-mini",            "openai", 0.00015, 0.0006, "USD"),
+    ("whisper-1",              "openai", 0.006,   0,      "USD"),
+)
+
 _TABLES: tuple[str, ...] = (
     _INTERACTIONS_BASE,
     _USER_SETTINGS_BASE,
@@ -205,6 +255,9 @@ _TABLES: tuple[str, ...] = (
     _FUNCOES_BASE,
     _EMPRESAS_BASE,
     _COLABORADORES_BASE,
+    _INTERACTION_CHUNKS_BASE,
+    _TOKEN_USAGE_BASE,
+    _MODEL_PRICING_BASE,
 )
 
 # Funções fixas do desenho do excalidraw — seed inicial, idempotente.
@@ -255,6 +308,13 @@ _INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_colaboradores_empresa  ON colaboradores(empresa_id);",
     "CREATE INDEX IF NOT EXISTS idx_colaboradores_funcao   ON colaboradores(funcao_id);",
     "CREATE INDEX IF NOT EXISTS idx_colaboradores_ativo    ON colaboradores(ativo);",
+    # interaction_chunks
+    "CREATE INDEX IF NOT EXISTS idx_chunks_interaction     ON interaction_chunks(interaction_id);",
+    # token_usage
+    "CREATE INDEX IF NOT EXISTS idx_token_usage_user       ON token_usage(user_id);",
+    "CREATE INDEX IF NOT EXISTS idx_token_usage_project    ON token_usage(project_id);",
+    "CREATE INDEX IF NOT EXISTS idx_token_usage_model      ON token_usage(model);",
+    "CREATE INDEX IF NOT EXISTS idx_token_usage_created    ON token_usage(created_at);",
 )
 
 # (tabela, coluna, declaração) — aplicado se faltar a coluna em DBs antigos.
@@ -294,6 +354,7 @@ async def init_schema(db_path: Path) -> None:
         for stmt in _INDEXES:
             await conn.execute(stmt)
         await _seed_funcoes(conn)
+        await _seed_model_pricing(conn)
         await conn.commit()
     log.info("Schema SQLite pronto em %s", db_path)
 
@@ -304,6 +365,19 @@ async def _seed_funcoes(conn: aiosqlite.Connection) -> None:
     await conn.executemany(
         "INSERT OR IGNORE INTO funcoes (nome, ativo, created_at) VALUES (?, 1, ?)",
         [(nome, ts) for nome in _FUNCOES_SEED],
+    )
+
+
+async def _seed_model_pricing(conn: aiosqlite.Connection) -> None:
+    """Insere pricing padrão se ainda não existir (idempotente via PRIMARY KEY)."""
+    ts = now_iso()
+    await conn.executemany(
+        """
+        INSERT OR IGNORE INTO model_pricing
+            (model, backend, cost_per_1k_input, cost_per_1k_output, currency, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [(m, b, ci, co, cur, ts) for m, b, ci, co, cur in _MODEL_PRICING_SEED],
     )
 
 

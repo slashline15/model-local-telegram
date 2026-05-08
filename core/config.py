@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     # Histórico cronológico injetado no prompt (independente do RAG semântico).
     rag_recent_history: int = Field(default=6)
 
+    # Chunking de documentos grandes.
+    chunk_size: int = Field(default=2500)
+    chunk_overlap: int = Field(default=300)
+
     log_level: str = Field(default="INFO")
     log_file: Path = Field(default=Path("./data/bot.log"))
 
@@ -112,6 +116,14 @@ class Settings(BaseSettings):
         default=0,
         description="Telegram ID que vira superadmin no primeiro /start.",
     )
+
+    # --- Debug Bot ---
+    telegram_debug_bot_token: str = Field(default="")
+    debug_mode: bool = Field(default=False)
+    debug_notify_min_cost_usd: float = Field(default=0.001)
+    debug_notify_sample_rate: float = Field(default=0.05)
+    debug_notify_on_error: bool = Field(default=True)
+    debug_notify_on_latency_ms: int = Field(default=10000)
 
     def ensure_dirs(self) -> None:
         for path in (

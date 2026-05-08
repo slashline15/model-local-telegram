@@ -133,3 +133,20 @@ def require_project_admin(handler: Handler) -> Handler:
         return None
 
     return wrapper
+
+
+def require_superadmin(handler: Handler) -> Handler:
+    """Só permite acesso a usuários com role='superadmin'."""
+    @require_active_user
+    @wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Any:
+        bot_user = get_bot_user(context)
+        if bot_user.role != "superadmin":
+            await update.effective_message.reply_text(  # type: ignore[union-attr]
+                "⛔ Só superadmin."
+            )
+            return None
+        return await handler(update, context)
+
+    return wrapper
+

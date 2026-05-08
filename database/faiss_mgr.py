@@ -17,10 +17,14 @@ log = get_logger(__name__)
 
 class FaissManager:
     """
-    Índice FAISS persistido em disco com mapeamento posição→sqlite_id.
+    Índice FAISS persistido em disco com mapeamento posição→chunk_id.
 
     Usa IndexIDMap2 sobre IndexFlatIP (similaridade por produto interno em
     vetores normalizados ⇒ cosseno). Toda I/O pesada roda em executor.
+
+    Após refatoração de chunking, o ID armazenado é chunk_id (não mais
+    interaction_id). Callers devem usar ChunksRepo para resolver chunk_id
+    → interaction_id.
     """
 
     def __init__(
@@ -64,17 +68,36 @@ class FaissManager:
         else:
             self._known_ids = set()
 
-    async def add(self, sqlite_id: int, vector: np.ndarray) -> None:
+    async def add(self, chunk_id: int, vector: np.ndarray) -> None:
         async with self._lock:
-            await asyncio.to_thread(self._add_sync, sqlite_id, vector)
+            await asyncio.to_thread(self._add_sync, chunk_id, vector)
 
-    def _add_sync(self, sqlite_id: int, vector: np.ndarray) -> None:
+    def _add_sync(self, chunk_id: int, vector: np.ndarray) -> None:
         if self._index is None:
             raise StorageError("FAISS não inicializado.")
         v = self._prepare(vector)
-        ids = np.array([sqlite_id], dtype=np.int64)
+        ids = np.array([chunk_id], dtype=np.int64)
         self._index.add_with_ids(v, ids)
-        self._known_ids.add(int(sqlite_id))
+        self._known_ids.add(int(chunk_id))
+        self._persist()
+
+    async def add_many(self, chunk_ids: list[int], vectors: list[np.ndarray]) -> None:
+        """Bulk insert — persiste uma vez ao final."""
+        if not chunk_ids:
+            return
+        async with self._lock:
+            await asyncio.to_thread(self._add_many_sync, chunk_ids, vectors)
+
+    def _add_many_sync(
+        self, chunk_ids: list[int], vectors: list[np.ndarray]
+    ) -> None:
+        if self._index is None:
+            raise StorageError("FAISS não inicializado.")
+        for chunk_id, vec in zip(chunk_ids, vectors, strict=True):
+            v = self._prepare(vec)
+            ids = np.array([chunk_id], dtype=np.int64)
+            self._index.add_with_ids(v, ids)
+            self._known_ids.add(int(chunk_id))
         self._persist()
 
     async def search(self, vector: np.ndarray, top_k: int) -> list[tuple[int, float]]:

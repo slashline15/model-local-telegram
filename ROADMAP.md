@@ -1,247 +1,266 @@
 # ROADMAP — Bot RDO / ollama_telegram
 
-Bot Telegram com RAG contrastivo sobre Ollama local, evoluindo para um
-sistema multi-usuário de **gestão de obras** com geração de RDO (Relatório
-Diário de Obra) como projeção sobre dados relacionais.
-
-> **Princípio fundamental:** O RDO **não é uma tabela**. É uma projeção
-> sobre eventos do dia, formatada (PDF/HTML/template) a partir de tabelas
-> de domínio (atividades, efetivo, clima, materiais, ocorrências, visitas).
-> A IA atua **na entrada** — entendendo linguagem informal de obra,
-> categorizando, deduplicando, sugerindo correções. **A renderização do
-> RDO é determinística** (consulta + formatação), nunca chama LLM.
+Contexto: bot Telegram com RAG contrastivo sobre Ollama local.
+O núcleo de IA (RAG, embeddings, contrastive learning) está funcional e estável.
+O objetivo é evoluir para um sistema multi-usuário de RDO (Relatório Diário de Obra).
 
 ---
 
-## Estado atual (sessão 2026-05-05)
+## Estado atual (sessão 2026-04-28)
 
-### Núcleo de IA ✅
-- RAG contrastivo com FAISS (768 dims, `nomic-embed-text:v1.5`)
-- Fallback chain: Ollama primário (`gemma4:31b-cloud`) → fallbacks Ollama
-  (`llama3.2:3b`) → OpenAI (`gpt-4o-mini`)
+### Infraestrutura de IA ✅
+- RAG contrastivo com FAISS (768 dims, nomic-embed-text)
+- Fallback chain: Ollama primário → Ollama fallbacks → OpenAI
 - Scoring 1-5 por interação, aprendizado contrastivo automático
-- Intent classifier, tag generator, tool registry
-- Tools: `web_search`, `reminders` (com rehidratação no boot via
-  `reminders.reload_pending()` em `tg/bot.py:139`)
+- Intent classifier, tag generator, tool use (web_search, reminders)
 - Pipeline auditável com `pipeline_steps` + `run_id`
-- Transcrição de voz (Whisper) opcional
-- Backup SQLite automático (até 10 cópias por padrão)
 
-### Identidade e acesso ✅
-- `users` com papéis globais (superadmin / admin / engineer / supervisor /
-  worker / client / etc.) e status (active / inactive / banned)
-- `projects` com `admin_id` (único admin por obra; criação atômica
-  já cadastra o admin como membro com permissões totais)
-- `invites` uso único (deep link `t.me/BOT?start=<token>`)
-- `project_members` com flags `can_approve_rdo`, `can_view_financial`,
-  `can_invite`
-- Middleware bloqueia não-cadastrado de cara, com mensagem pra pedir
-  convite
-- `user_settings.current_project_id` — obra ativa do usuário, persistida
+### Banco de dados atual
+Tabelas: `interactions`, `user_settings`, `reminders`, `pipeline_steps`, `users` (adicionada hoje)
 
-### Cadastros base ✅
-- `funcoes` — catálogo **global** (mesma "Pedreiro" vale em qualquer
-  canteiro), 15 funções seedadas idempotentemente do desenho original
-  (Engenheiro, Estagiário, Auxiliar, Apontador, Mestre de obras,
-  Encarregado, Gestor, Técnico de Segurança, Eletricista, Almoxarife,
-  Pedreiro, Carpinteiro, Servente, Betoneiro, Motorista)
-- `empresas` — vinculadas a obra, tipo `own` (própria) ou `third_party`
-  (terceira). Mesma empresa em N obras = N linhas (por design)
-- `colaboradores` — vinculados a `empresa_id` (obrigatório) e `funcao_id`
-  (opcional). Cadastro individual normalmente é da empresa própria;
-  terceiros entram como contagem por empresa no efetivo do dia
-
-### Tabelas no DB hoje
-`interactions`, `user_settings`, `pipeline_steps`, `reminders`, `users`,
-`projects`, `invites`, `project_members`, `funcoes`, `empresas`,
-`colaboradores`
-
-### Testes
-**91/91 verdes.** Cobertura:
-- Permissões (RBAC) — 12 testes (`test_permissions.py`)
-- Convites uso único + transferência de admin (`test_invite_flow.py`)
-- Membership e isolamento por obra (`test_projects_invites.py`)
-- Cadastros (funções, empresas, colaboradores) com isolamento
-  (`test_rdo_repos.py`)
-- RAG contrastivo, intent classifier, tag generator, tool registry
-- SQLite, FAISS, backup, prompt templates, UID
+### Correções feitas nessa sessão
+1. `OLLAMA_HOST=http://[::1]:11434` no ambiente Windows → corrigido para `127.0.0.1`
+2. `sys == 'win32'` (bug) → `sys.platform == 'win32'`
+3. Event loop Windows com PTB 21.x → `loop.run_until_complete()` + `run_polling()`
+4. Truncagem de embedding na query RAG (espelhando `_EMBED_INPUT_MAX_CHARS = 3000`)
 
 ---
 
-## Próxima fase — Cronograma Macro 🎯
-
-**Objetivo:** dar visão ampla, previsibilidade, e ancorar atividades reais
-(do dia-a-dia, registradas via chat) em etapas/atividades planejadas.
-
-Sem cronograma, registros do dia ficam soltos. Com cronograma, cada
-atividade real cita uma "atividade macro", e o sistema mede previsto vs.
-realizado por etapa.
+## Fase 2 — Obras e Controle de Acesso (próxima sessão)
 
 ### Tabelas a criar
 
 ```sql
--- ETAPA MACRO da obra (Mobilização, Terraplanagem, Estrutura, ...)
-CREATE TABLE schedule_phases (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    uid             TEXT    UNIQUE NOT NULL,
-    project_id      INTEGER NOT NULL REFERENCES projects(id),
-    phase_number    INTEGER NOT NULL,        -- ordem de exibição (1, 2, 3...)
-    name            TEXT    NOT NULL,
-    discipline      TEXT,                    -- civil | eletrica | hidraulica | seguranca
-    location        TEXT,                    -- bloco/andar/setor (texto livre)
-    planned_start   TEXT    NOT NULL,        -- ISO date
-    planned_end     TEXT    NOT NULL,
-    actual_start    TEXT,                    -- preenchido na 1ª atividade real ligada
-    actual_end      TEXT,                    -- preenchido quando progress_pct = 100
-    progress_pct    REAL    NOT NULL DEFAULT 0.0,  -- agregado das atividades macro
-    status          TEXT    NOT NULL DEFAULT 'pending',
-    -- pending | active | done | delayed | suspended
-    notes           TEXT,                    -- campo crítico — nunca truncar
-    created_by      INTEGER NOT NULL REFERENCES users(id),
-    created_at      TEXT    NOT NULL,
-    updated_at      TEXT    NOT NULL
+-- Convites de uso único (deep link /start?token=...)
+CREATE TABLE invites (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid         TEXT UNIQUE NOT NULL,   -- ex: AB3X9KF2 (exibido como #AB3X9KF2)
+    token       TEXT UNIQUE NOT NULL,   -- UUID interno para o deep link
+    project_id  INTEGER REFERENCES projects(id),  -- NULL = convite de plataforma
+    role        TEXT NOT NULL,
+    created_by  INTEGER NOT NULL REFERENCES users(id),
+    used_by     INTEGER REFERENCES users(id),
+    expires_at  TEXT,
+    used_at     TEXT,
+    created_at  TEXT NOT NULL
 );
 
--- ATIVIDADE MACRO de uma etapa (ex: "Concretagem do pavimento 2",
--- "Montagem de fôrmas pilares P1-P12"). Item de planejamento — quantidades
--- esperadas, datas previstas. Atividades reais do dia (próxima fase) vão
--- referenciar este id.
+-- Obras
+CREATE TABLE projects (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid         TEXT UNIQUE NOT NULL,   -- ex: GH72MX91 (exibido como #GH72MX91)
+    name        TEXT NOT NULL,
+    address     TEXT,
+    type        TEXT,   -- residencial | comercial | infraestrutura | reforma
+    status      TEXT NOT NULL DEFAULT 'active',
+    start_date  TEXT,
+    end_date    TEXT,
+    created_by  INTEGER NOT NULL REFERENCES users(id),
+    created_at  TEXT NOT NULL
+);
+
+-- Membros por obra (acesso estritamente isolado)
+CREATE TABLE project_members (
+    project_id          INTEGER NOT NULL REFERENCES projects(id),
+    user_id             INTEGER NOT NULL REFERENCES users(id),
+    role                TEXT NOT NULL,
+    can_approve_rdo     INTEGER NOT NULL DEFAULT 0,
+    can_view_financial  INTEGER NOT NULL DEFAULT 0,
+    can_invite          INTEGER NOT NULL DEFAULT 0,
+    joined_at           TEXT NOT NULL,
+    invite_id           INTEGER REFERENCES invites(id),
+    PRIMARY KEY (project_id, user_id)
+);
+```
+
+Migration em `interactions`:
+```sql
+ALTER TABLE interactions ADD COLUMN project_id INTEGER REFERENCES projects(id);
+```
+
+### Utilitário de UID (`core/uid.py`)
+```python
+import secrets
+
+_CHARS = "ABCDEFGHJKMNPQRSTVWXYZ23456789"  # sem ambiguidade: I, L, O, U, 0, 1
+
+def gen_uid(length: int = 8) -> str:
+    """Gera UID legível para exibição em mensagens (#AB3X9KF2)."""
+    return "".join(secrets.choice(_CHARS) for _ in range(length))
+```
+
+8 chars → 30^8 ≈ 656 bilhões de combinações.
+Exibição: `#` + uid (sem armazenar o `#` no banco).
+Usar em code blocks Telegram para evitar indexação como hashtag.
+
+### Fluxo de convite
+1. Admin executa `/invite @papel` → bot gera `token` (UUID) + `uid` (AB3X9KF2)
+2. Bot envia link `t.me/SEU_BOT?start=<token>`
+3. Usuário clica → `/start <token>` → bot valida token, pede nome, registra em `users`
+4. Token marcado como `used_at = now`, não reutilizável
+
+### Middleware de autorização
+Todos os handlers verificam:
+```python
+user = await deps.sqlite.get_user_by_telegram_id(update.effective_user.id)
+if user is None or user.status != 'active':
+    await update.message.reply_text("⛔ Acesso não autorizado.")
+    return
+```
+
+Atenção: hoje qualquer Telegram ID acessa o bot. Isso muda nessa fase.
+
+---
+
+## Fase 3 — Cronograma Macro (Gantt)
+
+### Tabelas
+
+```sql
+CREATE TABLE schedule_phases (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid            TEXT UNIQUE NOT NULL,
+    project_id     INTEGER NOT NULL REFERENCES projects(id),
+    phase_number   INTEGER NOT NULL,
+    name           TEXT NOT NULL,
+    discipline     TEXT,   -- civil | eletrica | hidraulica | seguranca
+    location       TEXT,
+    planned_start  TEXT NOT NULL,
+    planned_end    TEXT NOT NULL,
+    actual_start   TEXT,
+    actual_end     TEXT,
+    progress_pct   REAL NOT NULL DEFAULT 0.0,
+    status         TEXT NOT NULL DEFAULT 'pending',
+    -- pending | active | done | delayed | suspended
+    notes          TEXT,   -- campo mais importante
+    order_index    INTEGER NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
 CREATE TABLE phase_activities (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    uid             TEXT    UNIQUE NOT NULL,
+    uid             TEXT UNIQUE NOT NULL,
     phase_id        INTEGER NOT NULL REFERENCES schedule_phases(id),
-    name            TEXT    NOT NULL,
-    unit            TEXT,                    -- m², m³, un, vb, kg
-    quantity_total  REAL,                    -- meta planejada
-    quantity_done   REAL    NOT NULL DEFAULT 0.0,  -- somatório do realizado
+    name            TEXT NOT NULL,
+    unit            TEXT,      -- m², m³, un, vb
+    quantity_total  REAL,
+    quantity_done   REAL NOT NULL DEFAULT 0.0,
     planned_start   TEXT,
     planned_end     TEXT,
     actual_start    TEXT,
     actual_end      TEXT,
     notes           TEXT,
-    created_by      INTEGER NOT NULL REFERENCES users(id),
-    created_at      TEXT    NOT NULL,
-    updated_at      TEXT    NOT NULL
+    created_at      TEXT NOT NULL
 );
 ```
 
-### Comandos do bot (formulário guiado)
-
-- `/cronograma` — renderiza Gantt ASCII da obra ativa
-- `/etapa add` — bot pergunta nome, datas, disciplina, local em sequência
-- `/etapa update <UID> <campo> <valor>` — atualização pontual
-- `/atividade add <ETAPA_UID>` — formulário pra atividade macro
-- `/atividade progresso <UID> <quantidade>` — adiciona ao realizado;
-  recalcula `progress_pct` da etapa pai
-
-### Renderização (ASCII em monospace, fora de prompt LLM)
+### Gantt ASCII no Telegram
+Renderizado em bloco de código (monospace garantido):
 
 ```
 📅 CRONOGRAMA MACRO
-Obra: Reforma da Igreja Messiânica  #GH72MX91
-Hoje: 05/05/2026
+Obra: Reforma da Igreja Messiânica
+Hoje: 28/04/2026
 
-E1 ┤████████░░░         Mobilização         ✅ 100%
-E2 ┤    ████████▒▒▒▒░   Terraplanagem       🔄  42%
-E3 ┤             ░░░░░░ Estrutura            ⏳   0%
-E4 ┤               ░░░░ Cobertura            ⏳   0%
-   ┼────┬────┬────┬────┬────
-        Jan  Fev  Mar  Abr  Mai
+FASE 1 ┤████████░░░         Mobilização         ✅ 100%
+FASE 2 ┤    ████████▒▒▒▒░   Terraplanagem       🔄 42%
+FASE 3 ┤             ░░░░░░ Estrutura            ⏳
+FASE 4 ┤               ░░░░ Cobertura            ⏳
+       ┼────┬────┬────┬────┬────
+            Jan  Fev  Mar  Abr
 ```
+`#GH72MX91`
 
 Legenda: `█` executado · `▒` em andamento · `░` planejado
 
-### Regras de agregação
-- `phase.progress_pct` = média ponderada de `phase_activities.progress`
-  (cada atividade pondera por `quantity_total` se preenchido, senão peso igual)
-- `phase.actual_start` = mínimo de `phase_activities.actual_start` (não NULL)
-- `phase.actual_end` = preenchido quando todas as atividades têm `actual_end`
-- `phase.status` = `delayed` quando `today > planned_end` e `progress_pct < 100`
-
-### Testes mínimos (nova suite)
-- Criar etapa, criar atividades macro, vincular
-- Atualizar progresso de atividade → propaga pra etapa
-- Marcar status `delayed` quando passar do `planned_end`
-- Isolamento: etapa de obra A não aparece em queries de obra B
-- Render Gantt ASCII (snapshot teste de string)
+Entrada via formulário de botões (sem importar .mpp / .xlsx):
+- `/fase add` → bot pergunta nome, datas, disciplina em sequência
+- `/fase update FASE2 50` → atualiza progresso
+- `/cronograma` → renderiza Gantt
 
 ---
 
-## Fases seguintes (alta-órbita, sem detalhe ainda)
+## Fase 4 — RDO (Relatório Diário de Obra)
 
-### Atividades reais do dia
-Tabelas de eventos por domínio, todos com `project_id` e timestamp:
-- `activity_logs` — trabalho do dia, vinculado a `phase_activities.id`
-- `weather_periods` — clima por período (manhã/tarde/noite), categorizado
-  como `seco_produtivo / seco_improdutivo / chuva_produtiva / chuva_improdutiva / sem_expediente`
-- `workforce_entries` — efetivo do dia: cabeças por colaborador (próprio)
-  ou contagem por empresa (terceiros)
-- `material_movements` — entrada/saída de materiais
-- `incidents` — paralisações, ocorrências, acidentes
-- `visits` — visitas de cliente/terceiros
-- `media_attachments` — fotos/áudios vinculados a qualquer evento acima
+### Tabelas principais
 
-### Auditoria
-- `audit_log` universal com `table_name`, `record_id`, `actor`,
-  `before_json`, `after_json`, `timestamp`
-- Apenas nível 1 visualiza; níveis 1 e 2 podem alterar registros existentes
+```sql
+CREATE TABLE daily_reports (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid                 TEXT UNIQUE NOT NULL,
+    project_id          INTEGER NOT NULL REFERENCES projects(id),
+    author_id           INTEGER NOT NULL REFERENCES users(id),
+    report_date         TEXT NOT NULL,          -- data a que se refere o trabalho
+    weather             TEXT,                   -- sol | nublado | chuva | chuva_forte
+    temp_min_c          REAL,
+    temp_max_c          REAL,
+    precipitation_mm    REAL,
+    shift_start         TEXT,                   -- HH:MM
+    shift_end           TEXT,
+    interruptions_min   INTEGER DEFAULT 0,      -- minutos de paralisação
+    interruption_cause  TEXT,
+    workers_count       INTEGER,
+    activities          TEXT NOT NULL DEFAULT '[]',  -- JSON [{phase_id, activity_id, desc, pct_done}]
+    issues              TEXT NOT NULL DEFAULT '[]',  -- JSON [{desc, severity, resolved, photos}]
+    notes               TEXT,                   -- campo mais importante — anotações livres
+    photos              TEXT NOT NULL DEFAULT '[]',  -- JSON [interaction_id, ...]
+    status              TEXT NOT NULL DEFAULT 'draft',
+    -- draft | submitted | approved | rejected
+    approved_by         INTEGER REFERENCES users(id),
+    approved_at         TEXT,
+    rejection_reason    TEXT,
+    interaction_id      INTEGER REFERENCES interactions(id),  -- conversa que gerou o RDO
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
 
-### Fechamento de dia
-- `day_signatures` — `project_id`, `report_date`, `signed_by`, `signed_at`,
-  `pdf_path`, `snapshot_hash`
-- Snapshot congela o estado no momento da assinatura. Alterações
-  posteriores aparecem só no audit log; PDF assinado é imutável.
+-- Efetivos (trabalhadores em campo)
+CREATE TABLE workforce (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id       INTEGER NOT NULL REFERENCES daily_reports(id),
+    project_id      INTEGER NOT NULL REFERENCES projects(id),
+    user_id         INTEGER REFERENCES users(id),  -- NULL se não registrado
+    name            TEXT NOT NULL,
+    role            TEXT NOT NULL,   -- pedreiro | eletricista | encarregado | etc.
+    hours_worked    REAL NOT NULL,
+    phase_id        INTEGER REFERENCES schedule_phases(id),
+    created_at      TEXT NOT NULL
+);
+```
 
-### Geração do RDO
-- Renderizadores por template (HTML, PDF, formato online)
-- Determinístico: query + format. **Sem chamada LLM nessa etapa.**
-- Soma efetivo local + soma terceirizados = efetivo real
-- Gráfico pluviométrico mensal a partir de `weather_periods`
-- Lista de atividades agrupadas por etapa, com previsto vs. realizado
+### Embedding de RDOs
+```python
+embed_input = (
+    f"OBRA: {project.name}\n"
+    f"DATA: {report.report_date}\n"
+    f"ATIVIDADES: {activities_text}\n"
+    f"OCORRENCIAS: {issues_text}\n"
+    f"NOTAS: {report.notes}"
+)[:3000]
+```
 
-### Financeiro (último)
-- `budget_items` (orçamento por etapa/atividade)
-- `expenses` (gastos reais)
-- `measurements` (medições físico-financeiras)
-- Relatório de desvio planejado vs. executado
+Isso permite consultas como: "o que aconteceu de problema nessa fase?" com recuperação semântica.
 
 ---
 
-## Backlog técnico
+## Fase 5 — Financeiro
 
-- **Indexação de arquivos grandes** — hoje o bot avisa pedindo pra
-  reduzir; falta chunking/embedding incremental. Prioridade baixa
-  (não bloqueia nada). [final da fila]
-- **Teste automatizado de rehidratação de reminders** — funcionalidade
-  existe (`reload_pending` no boot) mas sem teste; adicionar.
-- **Migrar dados de teste** quando começar a entrar dado real, decidir
-  entre `ALTER TABLE` ou recriação do DB.
+- `budget_items` (itens do orçamento por fase/atividade)
+- `expenses` (gastos reais com data, valor, fornecedor, NF)
+- `measurements` (medições de avanço físico-financeiro — boletim de medição)
+- Relatório de desvio: planejado vs. executado por fase
+
+Mais simples que as fases anteriores — majoritariamente cálculos e formatação.
 
 ---
 
 ## Decisões de design para lembrar
 
-1. **`telegram_id` ≠ `users.id`** — sempre buscar por `telegram_id`,
-   armazenar FK com `users.id`
-2. **UIDs são só pra exibição** — banco armazena sem `#`, mensagens
-   exibem com `#` em code block (evita virar hashtag indexada)
-3. **Isolamento por obra é absoluto** — middleware checa
-   `project_members` antes de qualquer leitura de dados de obra
-4. **RAG injeta contexto de obra** — quando o usuário tem
-   `current_project_id`, o embedding prefix inclui nome da obra e
-   categoria
-5. **Notas são o campo mais importante** — nunca truncar, nunca
-   limitar. É o que salva construtoras em disputas
-6. **RDO não é tabela** — é projeção sobre eventos. Renderização é
-   determinística e imutável após assinatura
-7. **Tabelas específicas por domínio** — não tabela `events` genérica.
-   Integridade relacional importa pra documento legal
-8. **Audit trail universal** — toda alteração rastreada. Nível 1 vê;
-   1 e 2 podem alterar
-9. **Catálogo global de funções** — "Pedreiro" não é por obra
-10. **Empresas vinculadas à obra** — mesma empresa em N obras = N
-    linhas (facilita permissões e cadastros independentes)
-11. **AI atua na entrada, não na saída** — interpreta linguagem informal,
-    categoriza, sugere; renderização do RDO nunca chama LLM
-12. **Projeto principal valida tese central** — uma única IA com RAG
-    contrastivo resolve o que multiagentes + cálculos complexos travavam
+1. **`telegram_id` ≠ `users.id`** — sempre buscar por `telegram_id`, armazenar FK com `users.id`
+2. **UIDs são só para exibição** — banco armazena sem `#`, mensagens exibem com `#` em code block
+3. **Isolamento por obra é absoluto** — middleware deve checar `project_members` antes de qualquer leitura de dados de obra
+4. **RAG injeta contexto de obra** — quando usuário estiver em contexto de obra ativa, o embedding prefix inclui nome da obra e categoria
+5. **Notas são o campo mais importante** — nunca truncar, nunca limitar. É o que salva construtoras em disputas
+6. **Aprovação de RDO tem trilha imutável** — `approved_by`, `approved_at`, nunca deixar UPDATE apagar
+7. **Projeto principal** tem multiagentes + cálculos complexos que ficaram travados na IA — a validação aqui é justamente provar que uma única IA com RAG contrastivo resolve sem orquestrador

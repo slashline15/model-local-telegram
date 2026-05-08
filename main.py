@@ -16,6 +16,7 @@ from llm.ollama_client import OllamaClient
 from llm.openai_chat_client import OpenAIChatClient
 from llm.tag_generator import TagGenerator
 from tg.bot import BotDependencies, build_application
+from tg.debug_notifier import DebugNotifier
 from tools import reminders as reminder_tools
 from tools import web_search
 from tools.registry import ToolRegistry
@@ -62,6 +63,7 @@ async def _bootstrap() -> BotDependencies:
         ollama=ollama,
         sqlite=sqlite,
         faiss=faiss,
+        chunks=sqlite.chunks,
         top_k=settings.rag_top_k,
         max_positive=settings.rag_max_positive,
         max_negative=settings.rag_max_negative,
@@ -106,6 +108,27 @@ async def _bootstrap() -> BotDependencies:
     if settings.chat_fallback_models:
         log.info("Fallback Ollama: %s", ", ".join(settings.chat_fallback_models))
 
+    # Debug notifier — só ativa se token e chat_id estiverem configurados.
+    debug_notifier: DebugNotifier | None = None
+    if settings.debug_mode and settings.telegram_debug_bot_token:
+        # Chat ID do debug bot: por convenção = telegram_id do superadmin.
+        debug_chat_id = settings.bootstrap_superadmin_telegram_id
+        if debug_chat_id:
+            debug_notifier = DebugNotifier(
+                token=settings.telegram_debug_bot_token,
+                chat_id=debug_chat_id,
+                min_cost_usd=settings.debug_notify_min_cost_usd,
+                sample_rate=settings.debug_notify_sample_rate,
+                on_error=settings.debug_notify_on_error,
+                on_latency_ms=settings.debug_notify_on_latency_ms,
+            )
+            log.info("DebugNotifier ativo (chat_id=%s).", debug_chat_id)
+        else:
+            log.warning(
+                "DEBUG_MODE=true mas BOOTSTRAP_SUPERADMIN_TELEGRAM_ID não definido — "
+                "debug_notifier desativado."
+            )
+
     return BotDependencies(
         settings=settings,
         sqlite=sqlite,
@@ -118,6 +141,7 @@ async def _bootstrap() -> BotDependencies:
         reminders=reminders,
         transcriber=transcriber,
         openai_chat=openai_chat,
+        debug_notifier=debug_notifier,
     )
 
 

@@ -27,7 +27,8 @@ from llm.intent_classifier import IntentClassifier
 from llm.ollama_client import OllamaClient
 from llm.openai_chat_client import OpenAIChatClient
 from llm.tag_generator import TagGenerator
-from tg import callbacks, handlers, handlers_projects, handlers_rdo
+from tg import callbacks, handlers, handlers_debug, handlers_projects, handlers_rdo
+from tg.debug_notifier import DebugNotifier
 from tools.registry import ToolRegistry
 
 log = get_logger(__name__)
@@ -46,6 +47,7 @@ class BotDependencies:
     reminders: ReminderManager
     transcriber: WhisperTranscriber | None
     openai_chat: OpenAIChatClient | None
+    debug_notifier: DebugNotifier | None
 
 
 _BOT_COMMANDS: list[BotCommand] = [
@@ -123,6 +125,13 @@ def build_application(deps: BotDependencies) -> Application:
     app.add_handler(CallbackQueryHandler(callbacks.on_config, pattern=r"^cfg:"))
     app.add_handler(CallbackQueryHandler(callbacks.on_reminder_cancel, pattern=r"^rem:cancel:"))
 
+    # Comandos de debug — superadmin only.
+    app.add_handler(CommandHandler("consumo",          handlers_debug.cmd_consumo))
+    app.add_handler(CommandHandler("consumo_usuario",  handlers_debug.cmd_consumo_usuario))
+    app.add_handler(CommandHandler("consumo_obra",     handlers_debug.cmd_consumo_obra))
+    app.add_handler(CommandHandler("consumo_modelo",   handlers_debug.cmd_consumo_modelo))
+    app.add_handler(CommandHandler("status",           handlers_debug.cmd_status))
+
     return app
 
 
@@ -183,6 +192,8 @@ async def _on_post_shutdown(app: Application) -> None:
     await deps.ollama.close()
     if deps.openai_chat is not None:
         await deps.openai_chat.close()
+    if deps.debug_notifier is not None:
+        await deps.debug_notifier.close()
     log.info("Bot finalizado.")
 
 

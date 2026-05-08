@@ -169,3 +169,61 @@ class StatsSnapshot:
     avg_latency_ms: float | None
     last_run_id: str | None
     faiss_indexed: int
+
+
+@dataclass(slots=True, frozen=True)
+class InteractionChunk:
+    id: int
+    interaction_id: int
+    chunk_idx: int
+    content: str
+    doc_class: str
+    weight: float
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class TokenUsageRow:
+    id: int
+    run_id: str
+    interaction_id: int | None
+    user_id: int
+    project_id: int | None
+    model: str
+    backend: str
+    operation: str
+    prompt_tokens: int
+    response_tokens: int
+    total_tokens: int
+    duration_ms: int
+    quantity_secondary: float
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class TokenUsageSummary:
+    model: str
+    backend: str
+    total_prompt: int
+    total_response: int
+    total_tokens: int
+    total_duration_ms: int
+    cost_usd: float
+    count: int
+
+
+@dataclass(slots=True, frozen=True)
+class DailyTokenRow:
+    date: str
+    total_tokens: int
+    cost_usd: float
+
+
+@dataclass(slots=True, frozen=True)
+class ModelPricing:
+    model: str
+    backend: str
+    cost_per_1k_input: float
+    cost_per_1k_output: float
+    currency: str
+    updated_at: str

@@ -9,6 +9,7 @@ _QUERY_EMBED_MAX_CHARS: int = 3000  # espelha _EMBED_INPUT_MAX_CHARS em handlers
 from core.codes import format_code
 from core.logger import get_logger
 from database.faiss_mgr import FaissManager
+from database.repos.chunks import ChunksRepo
 from database.sqlite_mgr import Interaction, SQLiteManager
 from llm.ollama_client import OllamaClient
 from llm.prompt_templates import (
@@ -74,13 +75,15 @@ class ContrastiveRAG:
     """Two-Stage Retrieval contrastivo + histórico cronológico + fallback neutro.
 
     1) Busca histórico cronológico recente do user_id (últimos N turnos).
-    2) Top-K vetores em FAISS (excluindo já-vistos no histórico).
-    3) Metadados em SQLite, separa por score:
+    2) Top-K chunk_ids em FAISS.
+    3) Resolve chunk_id → interaction_id via ChunksRepo; aplica weight.
+    4) score_final = similarity * weight (pré-calculado na inserção).
+    5) Deduplica por interaction_id (mantém o chunk com maior score_final).
+    6) Metadados em SQLite, separa por score:
         - positivos:  score >= positive_threshold (até max_positive)
         - negativos:  score <= negative_threshold (até max_negative)
-    4) Se positivos+negativos = 0, usa Top-N como contexto neutro.
-    5) Para intent="summarize", joga fora o template contrastivo
-       (ele confunde o modelo, que sumariza as próprias âncoras).
+    7) Se positivos+negativos = 0, usa Top-N como contexto neutro.
+    8) Para intent="summarize", joga fora o template contrastivo.
     """
 
     def __init__(
@@ -88,6 +91,7 @@ class ContrastiveRAG:
         ollama: OllamaClient,
         sqlite: SQLiteManager,
         faiss: FaissManager,
+        chunks: ChunksRepo,
         top_k: int = 20,
         max_positive: int = 3,
         max_negative: int = 2,
@@ -99,6 +103,7 @@ class ContrastiveRAG:
         self._ollama = ollama
         self._sqlite = sqlite
         self._faiss = faiss
+        self._chunks = chunks
         self._top_k = top_k
         self._max_pos = max_positive
         self._max_neg = max_negative
@@ -164,7 +169,7 @@ class ContrastiveRAG:
                 embedding_model=self._embedding_model,
             )
 
-        # 4) Busca semântica.
+        # 4) Busca semântica — retorna chunk_ids.
         query_text = user_message[:_QUERY_EMBED_MAX_CHARS]
         if len(user_message) > _QUERY_EMBED_MAX_CHARS:
             log.debug(
@@ -190,39 +195,65 @@ class ContrastiveRAG:
                 embedding_model=self._embedding_model,
             )
 
-        sim_by_id: dict[int, float] = {sid: sim for sid, sim in raw_hits}
+        # 5) Resolve chunk_id → interaction_id + weight.
+        chunk_ids = [cid for cid, _ in raw_hits]
+        sim_by_chunk: dict[int, float] = {cid: sim for cid, sim in raw_hits}
+
+        chunk_rows = await self._chunks.get_by_ids(chunk_ids)
+        chunk_by_id = {c.id: c for c in chunk_rows}
+
+        # score_final = similarity * weight; deduplica por interaction_id.
+        best_by_interaction: dict[int, tuple[float, float]] = {}  # iid → (score_final, sim)
+        for cid, sim in raw_hits:
+            chunk = chunk_by_id.get(cid)
+            if chunk is None:
+                continue
+            iid = chunk.interaction_id
+            score_final = sim * chunk.weight
+            prev = best_by_interaction.get(iid)
+            if prev is None or score_final > prev[0]:
+                best_by_interaction[iid] = (score_final, sim)
+
+        # Ordena por score_final decrescente.
+        sorted_iids = sorted(
+            best_by_interaction.keys(),
+            key=lambda iid: best_by_interaction[iid][0],
+            reverse=True,
+        )
 
         # Evita duplicar no prompt o que já está no histórico cronológico.
         history_id_set = {r.id for r in history_rows}
-        candidate_ids = [sid for sid in sim_by_id.keys() if sid not in history_id_set]
+        candidate_ids = [iid for iid in sorted_iids if iid not in history_id_set]
 
         rows = await self._sqlite.fetch_by_ids(candidate_ids)
-        rows.sort(key=lambda r: sim_by_id.get(r.id, 0.0), reverse=True)
+        # Mantém a ordem de score_final.
+        row_by_id = {r.id: r for r in rows}
+        rows_sorted = [row_by_id[iid] for iid in candidate_ids if iid in row_by_id]
 
         positives: list[Interaction] = []
         negatives: list[Interaction] = []
         neutral_pool: list[Interaction] = []
         hits: list[RetrievedHit] = []
 
-        for r in rows:
-            sim = sim_by_id.get(r.id, 0.0)
+        for r in rows_sorted:
+            score_final, sim = best_by_interaction[r.id]
             if (
                 r.score is not None
                 and r.score >= self._pos_thr
                 and len(positives) < self._max_pos
             ):
                 positives.append(r)
-                hits.append(RetrievedHit(r.id, sim, r.score, "positive"))
+                hits.append(RetrievedHit(r.id, score_final, r.score, "positive"))
             elif (
                 r.score is not None
                 and r.score <= self._neg_thr
                 and len(negatives) < self._max_neg
             ):
                 negatives.append(r)
-                hits.append(RetrievedHit(r.id, sim, r.score, "negative"))
+                hits.append(RetrievedHit(r.id, score_final, r.score, "negative"))
             else:
                 neutral_pool.append(r)
-                hits.append(RetrievedHit(r.id, sim, r.score, "neutral"))
+                hits.append(RetrievedHit(r.id, score_final, r.score, "neutral"))
 
         fallback_used = (not positives) and (not negatives)
         neutral: list[Interaction] = []

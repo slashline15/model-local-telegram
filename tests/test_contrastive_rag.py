@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from database.faiss_mgr import FaissManager
+from database.repos.chunks import ChunkInsert
 from database.sqlite_mgr import SQLiteManager
 from llm.contrastive_rag import ContrastiveRAG
 
@@ -18,6 +19,7 @@ async def _seed(
     content: str,
     score: int | None,
 ) -> int:
+    """Insere uma interaction + 1 chunk + vetor no FAISS. Retorna interaction_id."""
     iid = await sqlite.insert_interaction(
         user_id=1, chat_id=1, user_message=f"q: {content}", bot_response=f"r: {content}",
         tags=[], intent=None, model_used=None, temperature=None,
@@ -34,7 +36,12 @@ async def _seed(
     rng = np.random.default_rng(seed)
     v = rng.standard_normal(8).astype(np.float32)
     v = v / float(np.linalg.norm(v))
-    await faiss.add(iid, v)
+
+    # Novo padrão: inserir chunk e usar chunk_id no FAISS.
+    chunk_ids = await sqlite.chunks.insert_many(
+        iid, [ChunkInsert(chunk_idx=0, content=content[:500], doc_class="note", weight=1.0)]
+    )
+    await faiss.add(chunk_ids[0], v)
     return iid
 
 
@@ -46,6 +53,7 @@ async def test_empty_index_returns_empty_bundle(
     rag = ContrastiveRAG(
         ollama=FakeOllama(),  # type: ignore[arg-type]
         sqlite=sqlite_mgr, faiss=faiss_mgr,
+        chunks=sqlite_mgr.chunks,
     )
     bundle = await rag.build("alguma pergunta")
     assert bundle.positives == [] and bundle.negatives == [] and bundle.hits == []
@@ -65,6 +73,7 @@ async def test_separates_positive_and_negative(
     rag = ContrastiveRAG(
         ollama=FakeOllama(),  # type: ignore[arg-type]
         sqlite=sqlite_mgr, faiss=faiss_mgr,
+        chunks=sqlite_mgr.chunks,
         top_k=10, max_positive=3, max_negative=2,
     )
     bundle = await rag.build("qualquer texto")
@@ -84,6 +93,7 @@ async def test_fallback_when_no_scored_interactions(
     rag = ContrastiveRAG(
         ollama=FakeOllama(),  # type: ignore[arg-type]
         sqlite=sqlite_mgr, faiss=faiss_mgr,
+        chunks=sqlite_mgr.chunks,
         top_k=10, max_neutral=2,
     )
     bundle = await rag.build("qualquer")

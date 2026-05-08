@@ -10,6 +10,9 @@ from llm.prompt_templates import TAG_GENERATOR_SYSTEM
 log = get_logger(__name__)
 
 _TAG_RE: re.Pattern[str] = re.compile(r"^[a-z0-9_]{2,32}$")
+_CODE_FENCE_RE: re.Pattern[str] = re.compile(
+    r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL
+)
 
 
 class TagGenerator:
@@ -46,9 +49,16 @@ class TagGenerator:
 
         return self._parse(result.content)
 
+    @staticmethod
+    def _strip_fences(raw: str) -> str:
+        """Remove ```json ... ``` que alguns modelos adicionam mesmo com format_json."""
+        m = _CODE_FENCE_RE.match(raw)
+        return m.group(1).strip() if m else raw.strip()
+
     def _parse(self, raw: str) -> list[str]:
+        stripped = self._strip_fences(raw)
         try:
-            obj = json.loads(raw)
+            obj = json.loads(stripped)
         except json.JSONDecodeError:
             log.warning("TagGenerator devolveu não-JSON: %r", raw[:200])
             return ["chat"]

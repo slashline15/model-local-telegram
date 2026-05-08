@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from core.logger import get_logger
 from llm.ollama_client import ChatMessage, OllamaClient
 
 log = get_logger(__name__)
+
+_CODE_FENCE_RE: re.Pattern[str] = re.compile(
+    r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL
+)
 
 ALLOWED_INTENTS: tuple[str, ...] = (
     "question",          # pergunta factual / conceitual
@@ -76,9 +81,16 @@ class IntentClassifier:
 
         return self._parse(result.content)
 
+    @staticmethod
+    def _strip_fences(raw: str) -> str:
+        """Remove ```json ... ``` que alguns modelos adicionam mesmo com format_json."""
+        m = _CODE_FENCE_RE.match(raw)
+        return m.group(1).strip() if m else raw.strip()
+
     def _parse(self, raw: str) -> IntentResult:
+        cleaned = self._strip_fences(raw)
         try:
-            obj = json.loads(raw)
+            obj = json.loads(cleaned)
         except json.JSONDecodeError:
             log.warning("IntentClassifier devolveu não-JSON: %r", raw[:200])
             return IntentResult(intent="other", confidence=0.0, reason="parse error")
