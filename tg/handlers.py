@@ -969,6 +969,9 @@ async def _process_user_input(
             bundle = await deps.rag.build(
                 text,
                 user_id=user_id,
+                project_id=(
+                    user_settings.current_project_id if user_settings else None
+                ),
                 n_recent_history=deps.settings.rag_recent_history,
                 intent=intent,
                 now_iso=_now_local_iso(),

@@ -30,7 +30,14 @@ from llm.intent_classifier import IntentClassifier
 from llm.ollama_client import OllamaClient
 from llm.openai_chat_client import OpenAIChatClient
 from llm.tag_generator import TagGenerator
-from tg import callbacks, handlers, handlers_debug, handlers_projects, handlers_rdo
+from tg import (
+    callbacks,
+    handlers,
+    handlers_debug,
+    handlers_obra,
+    handlers_projects,
+    handlers_rdo,
+)
 from tg.debug_notifier import DebugNotifier
 from tools.registry import ToolRegistry
 
@@ -165,6 +172,16 @@ def build_application(deps: BotDependencies) -> Application:
     app.add_handler(CommandHandler("empresa",    handlers_rdo.cmd_empresa))
     app.add_handler(CommandHandler("colabs",     handlers_rdo.cmd_colabs))
     app.add_handler(CommandHandler("colab",      handlers_rdo.cmd_colab))
+
+    app.add_handler(CommandHandler("clima",       handlers_obra.cmd_clima))
+    app.add_handler(CommandHandler("climas",      handlers_obra.cmd_climas))
+    app.add_handler(CommandHandler("efetivo",     handlers_obra.cmd_efetivo))
+    app.add_handler(CommandHandler("efetivos",    handlers_obra.cmd_efetivos))
+    app.add_handler(CommandHandler("atividade",   handlers_obra.cmd_atividade))
+    app.add_handler(CommandHandler("atividades",  handlers_obra.cmd_atividades))
+    app.add_handler(CommandHandler("anotacao",    handlers_obra.cmd_anotacao))
+    app.add_handler(CommandHandler("anotacoes",   handlers_obra.cmd_anotacoes))
+    app.add_handler(CommandHandler("rdo",         handlers_obra.cmd_rdo))
 
     app.add_handler(MessageHandler(filters.PHOTO, handlers.on_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handlers.on_voice))

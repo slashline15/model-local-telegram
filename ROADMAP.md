@@ -10,6 +10,14 @@ multi-usuário de Relatório Diário de Obra.
 
 ## Changelog
 
+- **2026-05-14 (2)** — Bug-fix RAG por obra + handlers de cadastro do diário.
+  RAG agora propaga `project_id` ativo: `fetch_by_ids` e `list_user_history`
+  filtram pela obra (fecha confusão de contexto entre obras do mesmo dono).
+  Novos comandos em `tg/handlers_obra.py`: `/clima`, `/efetivo`, `/atividade`,
+  `/anotacao` (+ listagens e `/rdo [data]`). 4 repos novos
+  (clima/efetivo/atividades/anotacoes) e modelos correspondentes. Etapa do
+  cronograma fica opcional no MVP (`etapa_id` NULL). Cadastro inicial será
+  via Google Forms; revisão de atividades órfãs vem depois.
 - **2026-05-14** — Isolamento de chats por usuário. `interactions.visibilidade`
   + `documents.visibilidade` (default `publica`). `fetch_by_ids` exige
   `requester_user_id` (kwonly). Aplicado no RAG, `/recall #iXX` e snippets.
@@ -35,8 +43,8 @@ multi-usuário de Relatório Diário de Obra.
 
 ### 🔄 Em construção
 - Comando `/doc` real com ACL (Passo 3 da refundação)
-- Handlers gravando em `atividades`/`efetivo`/`clima`/... (Passo 4)
 - Hierarquia de papéis N1/N2/N3 mapeada em `users.role`
+- Classificação de intent de obra (texto livre → registro estruturado)
 
 ### ⏳ Não começado
 - Cronograma macro (UI/handlers — tabela `cronograma_etapas` existe)
@@ -53,8 +61,8 @@ multi-usuário de Relatório Diário de Obra.
 | 1 | Aprovar esqueleto | ✅ 2026-05-12 |
 | 2 | Criar tabelas novas vazias | ✅ 2026-05-12 |
 | 2.5 | Isolamento básico de chats (visibilidade) | ✅ 2026-05-14 |
-| 3 | `/doc` + `role_permissions` + ACL no retrieval | ⏭ próximo |
-| 4 | Handlers gravam em paralelo nas tabelas novas | |
+| 3 | `/doc` + `role_permissions` + ACL no retrieval | |
+| 4 | Handlers de cadastro (`/clima /efetivo /atividade /anotacao /rdo`) | ✅ 2026-05-14 |
 | 5 | `interactions` para de receber dado de obra | |
 | 6 | `vw_rdo_dia` a partir de dias reais | |
 | 7 | Chunking semântico (parágrafo/seção) | |

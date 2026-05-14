@@ -1,7 +1,11 @@
 # database/repos/__init__.py
 
+from database.repos.anotacoes import AnotacoesRepo
+from database.repos.atividades import AtividadesRepo
 from database.repos.chunks import ChunksRepo
+from database.repos.clima import ClimaRepo
 from database.repos.colaboradores import ColaboradoresRepo
+from database.repos.efetivo import EfetivoRepo
 from database.repos.empresas import EmpresasRepo
 from database.repos.funcoes import FuncoesRepo
 from database.repos.interactions import InteractionsRepo
@@ -16,8 +20,12 @@ from database.repos.token_usage import TokenUsageRepo
 from database.repos.users import UsersRepo
 
 __all__ = [
+    "AnotacoesRepo",
+    "AtividadesRepo",
     "ChunksRepo",
+    "ClimaRepo",
     "ColaboradoresRepo",
+    "EfetivoRepo",
     "EmpresasRepo",
     "FuncoesRepo",
     "InteractionsRepo",

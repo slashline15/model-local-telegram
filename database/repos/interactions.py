@@ -93,6 +93,7 @@ class InteractionsRepo(BaseRepo):
         ids: Iterable[int],
         *,
         requester_user_id: int | None,
+        project_id: int | None = None,
     ) -> list[Interaction]:
         """Busca interações por id, com filtro de visibilidade obrigatório.
 
@@ -100,6 +101,8 @@ class InteractionsRepo(BaseRepo):
           usuário (bloqueia leitura cruzada via #iXX e RAG).
         - `requester_user_id=None`: bypass — uso interno (admin, jobs, testes).
           Tem que ser explícito pra impedir vazamento por esquecimento.
+        - `project_id=<int>`: também restringe à obra ativa (evita confusão
+          de contexto entre obras do mesmo usuário). `None` = não filtra.
 
         TODO: brecha N1/N2 (responsáveis lêem privadas alheias) virá quando a
         hierarquia de papéis (N1/N2/N3) estiver mapeada em users.role.
@@ -113,6 +116,9 @@ class InteractionsRepo(BaseRepo):
         if requester_user_id is not None:
             where += " AND (visibilidade = 'publica' OR user_id = ?)"
             params.append(requester_user_id)
+        if project_id is not None:
+            where += " AND project_id = ?"
+            params.append(project_id)
         query = f"SELECT * FROM interactions WHERE {where}"
         async with aiosqlite.connect(self._db_path) as conn:
             conn.row_factory = aiosqlite.Row
@@ -121,15 +127,30 @@ class InteractionsRepo(BaseRepo):
         return [_row_to_interaction(row) for row in rows]
 
     async def list_user_history(
-        self, user_id: int, limit: int = 10
+        self,
+        user_id: int,
+        limit: int = 10,
+        *,
+        project_id: int | None = None,
     ) -> list[Interaction]:
+        """Histórico cronológico do usuário, opcionalmente filtrado por obra.
+
+        `project_id=<int>` impede que conversa de outra obra entre no
+        contexto do prompt (confusão entre obras do mesmo dono).
+        """
+        params: list[Any] = [user_id]
+        where = "user_id = ?"
+        if project_id is not None:
+            where += " AND project_id = ?"
+            params.append(project_id)
+        params.append(int(limit))
+        query = (
+            f"SELECT * FROM interactions WHERE {where} "
+            f"ORDER BY id DESC LIMIT ?"
+        )
         async with aiosqlite.connect(self._db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                "SELECT * FROM interactions WHERE user_id = ? "
-                "ORDER BY id DESC LIMIT ?",
-                (user_id, int(limit)),
-            ) as cur:
+            async with conn.execute(query, params) as cur:
                 rows = await cur.fetchall()
         return [_row_to_interaction(r) for r in rows]
 

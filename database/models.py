@@ -228,3 +228,63 @@ class ModelPricing:
     cost_per_1k_output: float
     currency: str
     updated_at: str
+
+
+# ───── Entidades de obra (refundação 2026-05) ─────
+
+@dataclass(slots=True, frozen=True)
+class ClimaDiario:
+    id: int
+    project_id: int
+    dia: str           # YYYY-MM-DD
+    condicao: str      # sol | nublado | chuva
+    hora_inicio: str | None
+    hora_fim: str | None
+    interaction_id: int | None
+    criado_por: int
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class EfetivoDiario:
+    id: int
+    project_id: int
+    dia: str
+    funcao_id: int
+    empresa_id: int | None
+    qtd: int
+    interaction_id: int | None
+    criado_por: int
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class Atividade:
+    id: int
+    project_id: int
+    dia: str
+    etapa_id: int | None
+    responsavel_id: int | None
+    estado: str        # concluida | em_andamento | atrasada | impedida
+    descricao: str
+    interaction_id: int | None
+    criado_por: int
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class Anotacao:
+    id: int
+    project_id: int
+    dia: str
+    inicio: str | None
+    fim: str | None
+    natureza: str      # evento | ocorrencia
+    atividade_id: int | None
+    recurso: str | None
+    impacto: str | None
+    texto: str
+    visibilidade: str  # publica | privada
+    interaction_id: int | None
+    criado_por: int
+    created_at: str

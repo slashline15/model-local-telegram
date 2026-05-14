@@ -38,8 +38,12 @@ from database.models import (  # noqa: F401
     UserSettings,
 )
 from database.repos import (
+    AnotacoesRepo,
+    AtividadesRepo,
     ChunksRepo,
+    ClimaRepo,
     ColaboradoresRepo,
+    EfetivoRepo,
     EmpresasRepo,
     FuncoesRepo,
     InteractionsRepo,
@@ -80,6 +84,11 @@ class SQLiteManager:
         self.chunks = ChunksRepo(db_path)
         self.token_usage = TokenUsageRepo(db_path)
         self.model_pricing = ModelPricingRepo(db_path)
+        # Refundação 2026-05 — entidades de obra
+        self.clima = ClimaRepo(db_path)
+        self.efetivo = EfetivoRepo(db_path)
+        self.atividades = AtividadesRepo(db_path)
+        self.anotacoes = AnotacoesRepo(db_path)
 
     async def init_schema(self) -> None:
         await _init_schema(self._db_path)
@@ -137,15 +146,24 @@ class SQLiteManager:
         ids: Iterable[int],
         *,
         requester_user_id: int | None,
+        project_id: int | None = None,
     ) -> list[Interaction]:
         return await self.interactions.fetch_by_ids(
-            ids, requester_user_id=requester_user_id
+            ids,
+            requester_user_id=requester_user_id,
+            project_id=project_id,
         )
 
     async def list_user_history(
-        self, user_id: int, limit: int = 10
+        self,
+        user_id: int,
+        limit: int = 10,
+        *,
+        project_id: int | None = None,
     ) -> list[Interaction]:
-        return await self.interactions.list_user_history(user_id, limit)
+        return await self.interactions.list_user_history(
+            user_id, limit, project_id=project_id
+        )
 
     async def stats(self, faiss_indexed: int) -> StatsSnapshot:
         return await self.interactions.stats(faiss_indexed)

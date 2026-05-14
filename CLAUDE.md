@@ -15,8 +15,10 @@ refundação ativa (Fase 4, plano em 8 passos).
 
 ## Pastas
 
-- `tg/` — Telegram (handlers, bot, callbacks). `handlers._process_user_input`
-  é o pipeline principal.
+- `tg/` — Telegram. `handlers.py` (pipeline principal), `handlers_projects.py`
+  (obras/convites), `handlers_rdo.py` (funcoes/empresas/colabs),
+  `handlers_obra.py` (clima/efetivo/atividade/anotacao/rdo),
+  `handlers_debug.py` (consumo).
 - `llm/` — Ollama client, `contrastive_rag.py` (montagem do prompt),
   `prompt_templates.py`.
 - `database/` — schema, `sqlite_mgr.py` (fachada), `repos/` (CRUD por tabela),

@@ -117,6 +117,7 @@ class ContrastiveRAG:
         user_message: str,
         *,
         user_id: int | None = None,
+        project_id: int | None = None,
         n_recent_history: int = 0,
         intent: str | None = None,
         now_iso: str | None = None,
@@ -130,8 +131,10 @@ class ContrastiveRAG:
         history_rows: list[Interaction] = []
         history_examples: list[FewShotExample] = []
         if user_id is not None and n_recent_history > 0:
+            # Histórico cronológico filtrado pela obra ativa pra não
+            # misturar contexto de obras diferentes do mesmo usuário.
             recent = await self._sqlite.list_user_history(
-                user_id, limit=n_recent_history
+                user_id, limit=n_recent_history, project_id=project_id
             )
             history_rows = list(reversed(recent))  # mais antigo primeiro
             history_examples = [_to_example(r) for r in history_rows]
@@ -227,8 +230,12 @@ class ContrastiveRAG:
 
         # ACL: só carrega interações públicas ou do próprio user_id.
         # user_id=None aqui = bypass intencional (teste/admin).
+        # project_id também filtra: hits do FAISS podem vir de outras obras
+        # do mesmo dono — sem esse filtro o prompt vira sopa.
         rows = await self._sqlite.fetch_by_ids(
-            candidate_ids, requester_user_id=user_id
+            candidate_ids,
+            requester_user_id=user_id,
+            project_id=project_id,
         )
         # Mantém a ordem de score_final.
         row_by_id = {r.id: r for r in rows}
@@ -304,11 +311,17 @@ class ContrastiveRAG:
         )
 
     async def debug_recall(
-        self, user_message: str, *, user_id: int | None = None
+        self,
+        user_message: str,
+        *,
+        user_id: int | None = None,
+        project_id: int | None = None,
     ) -> RagBundle:
         """Mesma lógica de `build`, exposta para o comando /recall.
 
-        Propaga user_id pro filtro de visibilidade — sem ele, /recall vazaria
-        interações privadas de outros usuários nos snippets.
+        Propaga user_id e project_id pros filtros — sem isso /recall vazaria
+        interações privadas e mostraria hits de outras obras do mesmo user.
         """
-        return await self.build(user_message, user_id=user_id)
+        return await self.build(
+            user_message, user_id=user_id, project_id=project_id
+        )
