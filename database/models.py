@@ -33,6 +33,7 @@ class Interaction:
     tool_calls: list[dict[str, Any]]
     error: str | None
     run_id: str | None
+    visibilidade: str = "publica"  # publica | privada — controle de leitura cruzada
 
 
 @dataclass(slots=True, frozen=True)

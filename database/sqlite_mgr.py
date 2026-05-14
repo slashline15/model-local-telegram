@@ -132,8 +132,15 @@ class SQLiteManager:
     async def update_score(self, interaction_id: int, score: int) -> None:
         await self.interactions.update_score(interaction_id, score)
 
-    async def fetch_by_ids(self, ids: Iterable[int]) -> list[Interaction]:
-        return await self.interactions.fetch_by_ids(ids)
+    async def fetch_by_ids(
+        self,
+        ids: Iterable[int],
+        *,
+        requester_user_id: int | None,
+    ) -> list[Interaction]:
+        return await self.interactions.fetch_by_ids(
+            ids, requester_user_id=requester_user_id
+        )
 
     async def list_user_history(
         self, user_id: int, limit: int = 10

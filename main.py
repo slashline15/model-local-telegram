@@ -15,6 +15,13 @@ from llm.intent_classifier import IntentClassifier
 from llm.ollama_client import OllamaClient
 from llm.openai_chat_client import OpenAIChatClient
 from llm.tag_generator import TagGenerator
+from scripts.bootstrap_check import (
+    format_report,
+    format_report_public,
+    has_critical_failure,
+    run_checks,
+    send_report_to_telegram,
+)
 from tg.bot import BotDependencies, build_application
 from tg.debug_notifier import DebugNotifier
 from tools import reminders as reminder_tools
@@ -145,11 +152,73 @@ async def _bootstrap() -> BotDependencies:
     )
 
 
+async def _run_bootstrap_check(settings) -> bool:
+    """Roda verificações de ambiente antes de subir o bot.
+
+    Retorna True se ambiente está OK (pode prosseguir).
+    Se houver falha crítica, loga, envia relatório se possível, e retorna False.
+    """
+    log = get_logger(__name__)
+    log.info("Running bootstrap check...")
+    try:
+        results = await run_checks(settings)
+    except Exception as exc:
+        log.error("Bootstrap check quebrou: %s", exc)
+        return False
+
+    report_internal = format_report(results)
+    report_public = format_report_public(results)
+    chat_id = settings.bootstrap_superadmin_telegram_id
+
+    if has_critical_failure(results):
+        log.error("Falhas críticas no bootstrap:\n%s", report_internal)
+        # Tenta enviar relatório COMPLETO pelo debug bot (dados técnicos).
+        if settings.telegram_debug_bot_token and chat_id:
+            await send_report_to_telegram(
+                settings.telegram_debug_bot_token,
+                chat_id,
+                f"🔴 *Bootstrap FAILED*\n\n{report_internal}",
+            )
+        # Fallback: resumo simples pelo bot principal.
+        elif settings.telegram_bot_token and chat_id:
+            await send_report_to_telegram(
+                settings.telegram_bot_token,
+                chat_id,
+                f"🔴 *Bootstrap FAILED*\n\n{report_public}",
+            )
+        return False
+
+    log.info("Bootstrap check OK.\n%s", report_internal)
+    # Envia relatório COMPLETO pelo debug bot (dados técnicos).
+    if settings.telegram_debug_bot_token and chat_id:
+        await send_report_to_telegram(
+            settings.telegram_debug_bot_token,
+            chat_id,
+            f"🟢 *Bootstrap OK*\n\n{report_internal}",
+        )
+    # Fallback: resumo simples pelo bot principal.
+    elif settings.telegram_bot_token and chat_id:
+        await send_report_to_telegram(
+            settings.telegram_bot_token,
+            chat_id,
+            f"🟢 *Bootstrap OK*\n\n{report_public}",
+        )
+    return True
+
+
 def main() -> None:
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    settings = get_settings()
+    setup_logging(level=settings.log_level, log_file=settings.log_file, use_color=True)
+
+    ok = loop.run_until_complete(_run_bootstrap_check(settings))
+    if not ok:
+        sys.exit(1)
+
     deps = loop.run_until_complete(_bootstrap())
     app = build_application(deps)
     app.run_polling(allowed_updates=None)

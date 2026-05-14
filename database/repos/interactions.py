@@ -88,15 +88,35 @@ class InteractionsRepo(BaseRepo):
             )
             await conn.commit()
 
-    async def fetch_by_ids(self, ids: Iterable[int]) -> list[Interaction]:
+    async def fetch_by_ids(
+        self,
+        ids: Iterable[int],
+        *,
+        requester_user_id: int | None,
+    ) -> list[Interaction]:
+        """Busca interações por id, com filtro de visibilidade obrigatório.
+
+        - `requester_user_id=<int>`: retorna só linhas públicas ou do próprio
+          usuário (bloqueia leitura cruzada via #iXX e RAG).
+        - `requester_user_id=None`: bypass — uso interno (admin, jobs, testes).
+          Tem que ser explícito pra impedir vazamento por esquecimento.
+
+        TODO: brecha N1/N2 (responsáveis lêem privadas alheias) virá quando a
+        hierarquia de papéis (N1/N2/N3) estiver mapeada em users.role.
+        """
         ids_list = list(ids)
         if not ids_list:
             return []
         placeholders = ",".join("?" for _ in ids_list)
-        query = f"SELECT * FROM interactions WHERE id IN ({placeholders})"
+        params: list[Any] = list(ids_list)
+        where = f"id IN ({placeholders})"
+        if requester_user_id is not None:
+            where += " AND (visibilidade = 'publica' OR user_id = ?)"
+            params.append(requester_user_id)
+        query = f"SELECT * FROM interactions WHERE {where}"
         async with aiosqlite.connect(self._db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            async with conn.execute(query, ids_list) as cur:
+            async with conn.execute(query, params) as cur:
                 rows = await cur.fetchall()
         return [_row_to_interaction(row) for row in rows]
 
@@ -189,4 +209,5 @@ def _row_to_interaction(row: aiosqlite.Row) -> Interaction:
         tool_calls=[x for x in _json_list("tool_calls") if isinstance(x, dict)],
         error=_opt("error"),
         run_id=_opt("run_id"),
+        visibilidade=str(_opt("visibilidade") or "publica"),
     )

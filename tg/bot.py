@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ssl
+import sys
 from dataclasses import dataclass
 
 from telegram import BotCommand, Update
@@ -15,6 +17,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 from core.audio_transcriber import WhisperTranscriber
 from core.config import Settings
@@ -74,21 +77,68 @@ _BOT_COMMANDS: list[BotCommand] = [
 ]
 
 
+def _windows_ssl_request(
+    read_timeout: float = 60.0,
+    write_timeout: float = 60.0,
+    connect_timeout: float = 30.0,
+    pool_timeout: float = 30.0,
+    media_write_timeout: float = 600.0,
+    connection_pool_size: int = 1,
+) -> HTTPXRequest:
+    """HTTPXRequest que usa o Windows certificate store (inclui CAs do sistema, ex: Kaspersky)."""
+    return HTTPXRequest(
+        read_timeout=read_timeout,
+        write_timeout=write_timeout,
+        connect_timeout=connect_timeout,
+        pool_timeout=pool_timeout,
+        media_write_timeout=media_write_timeout,
+        connection_pool_size=connection_pool_size,
+        httpx_kwargs={"verify": ssl.create_default_context()},
+    )
+
+
 def build_application(deps: BotDependencies) -> Application:
     s = deps.settings
-    app: Application = (
-        ApplicationBuilder()
-        .token(s.telegram_bot_token)
-        .read_timeout(s.telegram_read_timeout_s)
-        .write_timeout(s.telegram_write_timeout_s)
-        .connect_timeout(s.telegram_connect_timeout_s)
-        .pool_timeout(s.telegram_pool_timeout_s)
-        .media_write_timeout(s.telegram_media_write_timeout_s)
-        .get_updates_read_timeout(s.telegram_get_updates_read_timeout_s)
-        .post_init(_on_post_init)
-        .post_shutdown(_on_post_shutdown)
-        .build()
-    )
+
+    if sys.platform == "win32":
+        base_req = _windows_ssl_request(
+            read_timeout=s.telegram_read_timeout_s,
+            write_timeout=s.telegram_write_timeout_s,
+            connect_timeout=s.telegram_connect_timeout_s,
+            pool_timeout=s.telegram_pool_timeout_s,
+            media_write_timeout=s.telegram_media_write_timeout_s,
+        )
+        upd_req = _windows_ssl_request(
+            read_timeout=s.telegram_get_updates_read_timeout_s,
+            write_timeout=s.telegram_write_timeout_s,
+            connect_timeout=s.telegram_connect_timeout_s,
+            pool_timeout=s.telegram_pool_timeout_s,
+            media_write_timeout=s.telegram_media_write_timeout_s,
+        )
+        app: Application = (
+            ApplicationBuilder()
+            .token(s.telegram_bot_token)
+            .request(base_req)
+            .get_updates_request(upd_req)
+            .post_init(_on_post_init)
+            .post_shutdown(_on_post_shutdown)
+            .build()
+        )
+        log.info("Windows detectado: HTTPXRequest usando ssl.create_default_context()")
+    else:
+        app: Application = (
+            ApplicationBuilder()
+            .token(s.telegram_bot_token)
+            .read_timeout(s.telegram_read_timeout_s)
+            .write_timeout(s.telegram_write_timeout_s)
+            .connect_timeout(s.telegram_connect_timeout_s)
+            .pool_timeout(s.telegram_pool_timeout_s)
+            .media_write_timeout(s.telegram_media_write_timeout_s)
+            .get_updates_read_timeout(s.telegram_get_updates_read_timeout_s)
+            .post_init(_on_post_init)
+            .post_shutdown(_on_post_shutdown)
+            .build()
+        )
 
     app.bot_data["deps"] = deps
     app.add_error_handler(_on_error)

@@ -12,5 +12,8 @@ data/
 *.swp
 # arquivos temporários gerados pelo terminal
 2026-*-local-command-caveatcaveat-*.txt
+2026-*-local-command-*.txt
+docs/2026-*-reinicio-*.txt
 assets/*
 docs/notes/*
+docs/rdo_preview_exemplo.html

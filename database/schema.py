@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS interactions (
     tool_calls          TEXT    NOT NULL DEFAULT '[]',
     error               TEXT,
     run_id              TEXT,
-    project_id          INTEGER REFERENCES projects(id)
+    project_id          INTEGER REFERENCES projects(id),
+    visibilidade        TEXT    NOT NULL DEFAULT 'publica'  -- publica | privada
 );
 """
 
@@ -205,6 +206,199 @@ CREATE TABLE IF NOT EXISTS interaction_chunks (
 );
 """
 
+# =============================================================================
+# Refundação 2026-05 — tabelas novas (esqueleto consolidado)
+# =============================================================================
+# Convenção de nível: INTEGER 1=N1 (admin), 2=N2 (co-responsável), 3=N3 (op).
+# ACL: usuário com role numérico <= valor_min pode operar.
+# Ver ROADMAP.md (Fase 4 reescrita) e vault Obsidian "Esqueleto consolidado".
+
+# Catálogo de classes de documento. Substitui o enum hardcoded de doc_class.
+# Peso e ACL editáveis sem código — adicionar/remover classe é INSERT/UPDATE.
+_DOC_CLASSES_BASE: str = """
+CREATE TABLE IF NOT EXISTS doc_classes (
+    slug                    TEXT    PRIMARY KEY,
+    label                   TEXT    NOT NULL,
+    peso                    REAL    NOT NULL DEFAULT 1.0,
+    nivel_min_classificar   INTEGER NOT NULL DEFAULT 3,
+    nivel_min_ler           INTEGER NOT NULL DEFAULT 3,
+    ativo                   INTEGER NOT NULL DEFAULT 1,
+    created_at              TEXT    NOT NULL
+);
+"""
+
+# Regras de permissão por papel. Adicionar regra = INSERT, não código.
+# Convenção: ausência de linha = lógica default da app decide.
+_ROLE_PERMISSIONS_BASE: str = """
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role        TEXT    NOT NULL,
+    action      TEXT    NOT NULL,
+    resource    TEXT    NOT NULL,
+    allowed     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (role, action, resource)
+);
+"""
+
+# Upload classificado de documento (via /doc). Separado de interactions
+# porque tem ACL forte e ciclo de vida próprio.
+_DOCUMENTS_BASE: str = """
+CREATE TABLE IF NOT EXISTS documents (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid             TEXT    UNIQUE NOT NULL,
+    project_id      INTEGER NOT NULL REFERENCES projects(id),
+    doc_class       TEXT    NOT NULL REFERENCES doc_classes(slug),
+    titulo          TEXT    NOT NULL,
+    arquivo_path    TEXT,
+    arquivo_hash    TEXT,
+    mime            TEXT,
+    enviado_por     INTEGER NOT NULL REFERENCES users(id),
+    interaction_id  INTEGER REFERENCES interactions(id),
+    visibilidade    TEXT    NOT NULL DEFAULT 'publica',  -- publica | privada
+    created_at      TEXT    NOT NULL
+);
+"""
+
+# Cronograma macro. Organização leve com auto-relação (parent_id).
+# Sem regras de impedimento — só pra orientar atividades.
+_CRONOGRAMA_ETAPAS_BASE: str = """
+CREATE TABLE IF NOT EXISTS cronograma_etapas (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid                     TEXT    UNIQUE NOT NULL,
+    project_id              INTEGER NOT NULL REFERENCES projects(id),
+    parent_id               INTEGER REFERENCES cronograma_etapas(id),
+    etapa                   TEXT    NOT NULL,
+    descricao               TEXT,
+    data_prevista_inicio    TEXT,
+    data_prevista_termino   TEXT,
+    ordem                   INTEGER NOT NULL DEFAULT 0,
+    created_at              TEXT    NOT NULL
+);
+"""
+
+# ENTIDADES DE OBRA — fonte da verdade. interaction_id é só rastreabilidade.
+
+_ATIVIDADES_BASE: str = """
+CREATE TABLE IF NOT EXISTS atividades (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL REFERENCES projects(id),
+    dia             TEXT    NOT NULL,
+    etapa_id        INTEGER REFERENCES cronograma_etapas(id),
+    responsavel_id  INTEGER REFERENCES users(id),
+    estado          TEXT    NOT NULL,
+    descricao       TEXT    NOT NULL,
+    interaction_id  INTEGER REFERENCES interactions(id),
+    criado_por      INTEGER NOT NULL REFERENCES users(id),
+    created_at      TEXT    NOT NULL
+);
+"""
+
+_EFETIVO_DIARIO_BASE: str = """
+CREATE TABLE IF NOT EXISTS efetivo_diario (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL REFERENCES projects(id),
+    dia             TEXT    NOT NULL,
+    funcao_id       INTEGER NOT NULL REFERENCES funcoes(id),
+    empresa_id      INTEGER REFERENCES empresas(id),
+    qtd             INTEGER NOT NULL,
+    interaction_id  INTEGER REFERENCES interactions(id),
+    criado_por      INTEGER NOT NULL REFERENCES users(id),
+    created_at      TEXT    NOT NULL
+);
+"""
+
+_CLIMA_DIARIO_BASE: str = """
+CREATE TABLE IF NOT EXISTS clima_diario (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL REFERENCES projects(id),
+    dia             TEXT    NOT NULL,
+    condicao        TEXT    NOT NULL,
+    hora_inicio     TEXT,
+    hora_fim        TEXT,
+    interaction_id  INTEGER REFERENCES interactions(id),
+    criado_por      INTEGER NOT NULL REFERENCES users(id),
+    created_at      TEXT    NOT NULL
+);
+"""
+
+# Um expediente por (project, dia).
+_EXPEDIENTE_DIARIO_BASE: str = """
+CREATE TABLE IF NOT EXISTS expediente_diario (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  INTEGER NOT NULL REFERENCES projects(id),
+    dia         TEXT    NOT NULL,
+    inicio      TEXT    NOT NULL,
+    fim         TEXT    NOT NULL,
+    regime      TEXT,
+    criado_por  INTEGER NOT NULL REFERENCES users(id),
+    created_at  TEXT    NOT NULL,
+    UNIQUE (project_id, dia)
+);
+"""
+
+_MATERIAIS_MOVIMENTO_BASE: str = """
+CREATE TABLE IF NOT EXISTS materiais_movimento (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL REFERENCES projects(id),
+    dia             TEXT    NOT NULL,
+    item            TEXT    NOT NULL,
+    qtd             REAL,
+    unidade         TEXT,
+    responsavel     TEXT,
+    status          TEXT,
+    interaction_id  INTEGER REFERENCES interactions(id),
+    criado_por      INTEGER NOT NULL REFERENCES users(id),
+    created_at      TEXT    NOT NULL
+);
+"""
+
+# Campo crítico do RDO — temporalidade, vínculo, impacto, natureza.
+_ANOTACOES_BASE: str = """
+CREATE TABLE IF NOT EXISTS anotacoes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id      INTEGER NOT NULL REFERENCES projects(id),
+    dia             TEXT    NOT NULL,
+    inicio          TEXT,
+    fim             TEXT,
+    natureza        TEXT    NOT NULL,
+    atividade_id    INTEGER REFERENCES atividades(id),
+    recurso         TEXT,
+    impacto         TEXT,
+    texto           TEXT    NOT NULL,
+    visibilidade    TEXT    NOT NULL DEFAULT 'publica',
+    interaction_id  INTEGER REFERENCES interactions(id),
+    criado_por      INTEGER NOT NULL REFERENCES users(id),
+    created_at      TEXT    NOT NULL
+);
+"""
+
+# Satélites de interactions (1:1). Populados em paralelo a interactions
+# até a coexistência terminar; depois interactions perde essas colunas.
+_INTERACTION_TELEMETRY_BASE: str = """
+CREATE TABLE IF NOT EXISTS interaction_telemetry (
+    interaction_id      INTEGER PRIMARY KEY REFERENCES interactions(id),
+    model_used          TEXT,
+    temperature         REAL,
+    prompt_tokens       INTEGER,
+    response_tokens     INTEGER,
+    total_duration_ms   INTEGER,
+    tool_calls          TEXT    NOT NULL DEFAULT '[]',
+    error               TEXT,
+    run_id              TEXT
+);
+"""
+
+_INTERACTION_RAG_BASE: str = """
+CREATE TABLE IF NOT EXISTS interaction_rag (
+    interaction_id      INTEGER PRIMARY KEY REFERENCES interactions(id),
+    positive_ids        TEXT    NOT NULL DEFAULT '[]',
+    negative_ids        TEXT    NOT NULL DEFAULT '[]',
+    retrieved_count     INTEGER,
+    embedding_model     TEXT,
+    embedding_dim       INTEGER,
+    prompt_used         TEXT
+);
+"""
+
 _TOKEN_USAGE_BASE: str = """
 CREATE TABLE IF NOT EXISTS token_usage (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,6 +437,20 @@ _MODEL_PRICING_SEED: tuple[tuple[str, str, float, float, str], ...] = (
     ("whisper-1",              "openai", 0.006,   0,      "USD"),
 )
 
+# (slug, label, peso, nivel_min_classificar, nivel_min_ler)
+# Nível: 1=N1 (admin), 2=N2 (co-resp), 3=N3 (op). Comparação <= libera.
+# Ex.: nivel_min_ler=1 → só N1 lê (folha de pagamento).
+_DOC_CLASSES_SEED: tuple[tuple[str, str, float, int, int], ...] = (
+    ("contrato",   "Contrato",                 1.5, 2, 2),
+    ("memorial",   "Memorial descritivo",      1.4, 2, 3),
+    ("norma",      "Norma técnica",            1.3, 2, 3),
+    ("proposta",   "Proposta comercial",       1.1, 2, 2),
+    ("folha_pgto", "Folha de pagamento",       1.4, 1, 1),
+    ("anotacao",   "Anotação livre",           1.0, 3, 3),
+    ("reuniao",    "Transcrição de reunião",   0.7, 3, 3),
+    ("outro",      "Outro",                    0.8, 3, 3),
+)
+
 _TABLES: tuple[str, ...] = (
     _INTERACTIONS_BASE,
     _USER_SETTINGS_BASE,
@@ -258,6 +466,19 @@ _TABLES: tuple[str, ...] = (
     _INTERACTION_CHUNKS_BASE,
     _TOKEN_USAGE_BASE,
     _MODEL_PRICING_BASE,
+    # Refundação 2026-05
+    _DOC_CLASSES_BASE,
+    _ROLE_PERMISSIONS_BASE,
+    _DOCUMENTS_BASE,
+    _CRONOGRAMA_ETAPAS_BASE,
+    _ATIVIDADES_BASE,
+    _EFETIVO_DIARIO_BASE,
+    _CLIMA_DIARIO_BASE,
+    _EXPEDIENTE_DIARIO_BASE,
+    _MATERIAIS_MOVIMENTO_BASE,
+    _ANOTACOES_BASE,
+    _INTERACTION_TELEMETRY_BASE,
+    _INTERACTION_RAG_BASE,
 )
 
 # Funções fixas do desenho do excalidraw — seed inicial, idempotente.
@@ -310,11 +531,30 @@ _INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_colaboradores_ativo    ON colaboradores(ativo);",
     # interaction_chunks
     "CREATE INDEX IF NOT EXISTS idx_chunks_interaction     ON interaction_chunks(interaction_id);",
+    "CREATE INDEX IF NOT EXISTS idx_chunks_document        ON interaction_chunks(document_id);",
     # token_usage
     "CREATE INDEX IF NOT EXISTS idx_token_usage_user       ON token_usage(user_id);",
     "CREATE INDEX IF NOT EXISTS idx_token_usage_project    ON token_usage(project_id);",
     "CREATE INDEX IF NOT EXISTS idx_token_usage_model      ON token_usage(model);",
     "CREATE INDEX IF NOT EXISTS idx_token_usage_created    ON token_usage(created_at);",
+    # Refundação 2026-05
+    "CREATE INDEX IF NOT EXISTS idx_doc_classes_ativo      ON doc_classes(ativo);",
+    "CREATE INDEX IF NOT EXISTS idx_documents_project      ON documents(project_id);",
+    "CREATE INDEX IF NOT EXISTS idx_documents_class        ON documents(doc_class);",
+    "CREATE INDEX IF NOT EXISTS idx_documents_enviado_por  ON documents(enviado_por);",
+    "CREATE INDEX IF NOT EXISTS idx_cronograma_project     ON cronograma_etapas(project_id);",
+    "CREATE INDEX IF NOT EXISTS idx_cronograma_parent      ON cronograma_etapas(parent_id);",
+    "CREATE INDEX IF NOT EXISTS idx_atividades_project_dia ON atividades(project_id, dia);",
+    "CREATE INDEX IF NOT EXISTS idx_atividades_etapa       ON atividades(etapa_id);",
+    "CREATE INDEX IF NOT EXISTS idx_atividades_resp        ON atividades(responsavel_id);",
+    "CREATE INDEX IF NOT EXISTS idx_efetivo_project_dia    ON efetivo_diario(project_id, dia);",
+    "CREATE INDEX IF NOT EXISTS idx_efetivo_funcao         ON efetivo_diario(funcao_id);",
+    "CREATE INDEX IF NOT EXISTS idx_efetivo_empresa        ON efetivo_diario(empresa_id);",
+    "CREATE INDEX IF NOT EXISTS idx_clima_project_dia      ON clima_diario(project_id, dia);",
+    "CREATE INDEX IF NOT EXISTS idx_materiais_project_dia  ON materiais_movimento(project_id, dia);",
+    "CREATE INDEX IF NOT EXISTS idx_anotacoes_project_dia  ON anotacoes(project_id, dia);",
+    "CREATE INDEX IF NOT EXISTS idx_anotacoes_atividade    ON anotacoes(atividade_id);",
+    "CREATE INDEX IF NOT EXISTS idx_anotacoes_natureza     ON anotacoes(natureza);",
 )
 
 # (tabela, coluna, declaração) — aplicado se faltar a coluna em DBs antigos.
@@ -341,6 +581,11 @@ _LEGACY_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("user_settings", "current_project_id", "INTEGER REFERENCES projects(id)"),
     ("interactions",  "project_id",         "INTEGER REFERENCES projects(id)"),
     ("projects",      "admin_id",           "INTEGER REFERENCES users(id)"),
+    # Refundação 2026-05
+    ("interactions",       "correction",   "TEXT"),
+    ("interaction_chunks", "document_id",  "INTEGER REFERENCES documents(id)"),
+    ("interactions",       "visibilidade", "TEXT NOT NULL DEFAULT 'publica'"),
+    ("documents",          "visibilidade", "TEXT NOT NULL DEFAULT 'publica'"),
 )
 
 
@@ -355,6 +600,7 @@ async def init_schema(db_path: Path) -> None:
             await conn.execute(stmt)
         await _seed_funcoes(conn)
         await _seed_model_pricing(conn)
+        await _seed_doc_classes(conn)
         await conn.commit()
     log.info("Schema SQLite pronto em %s", db_path)
 
@@ -378,6 +624,19 @@ async def _seed_model_pricing(conn: aiosqlite.Connection) -> None:
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         [(m, b, ci, co, cur, ts) for m, b, ci, co, cur in _MODEL_PRICING_SEED],
+    )
+
+
+async def _seed_doc_classes(conn: aiosqlite.Connection) -> None:
+    """Catálogo inicial de classes de documento (idempotente via PK)."""
+    ts = now_iso()
+    await conn.executemany(
+        """
+        INSERT OR IGNORE INTO doc_classes
+            (slug, label, peso, nivel_min_classificar, nivel_min_ler, ativo, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?)
+        """,
+        [(s, l, p, nc, nl, ts) for s, l, p, nc, nl in _DOC_CLASSES_SEED],
     )
 
 

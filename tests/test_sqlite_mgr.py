@@ -46,7 +46,7 @@ async def test_insert_and_fetch_interaction(sqlite_mgr: SQLiteManager) -> None:
     )
     assert iid > 0
 
-    rows = await sqlite_mgr.fetch_by_ids([iid])
+    rows = await sqlite_mgr.fetch_by_ids([iid], requester_user_id=None)
     assert len(rows) == 1
     r = rows[0]
     assert r.intent == "chitchat"
@@ -68,7 +68,7 @@ async def test_update_score_validates_range(sqlite_mgr: SQLiteManager) -> None:
         error=None, run_id=None,
     )
     await sqlite_mgr.update_score(iid, 5)
-    rows = await sqlite_mgr.fetch_by_ids([iid])
+    rows = await sqlite_mgr.fetch_by_ids([iid], requester_user_id=None)
     assert rows[0].score == 5
 
     with pytest.raises(Exception):
@@ -139,7 +139,7 @@ async def test_migrates_legacy_db(tmp_path: Path) -> None:
         tool_calls=[], media_path=None, media_type="text",
         error=None, run_id="abc",
     )
-    rows = await mgr.fetch_by_ids([new_id])
+    rows = await mgr.fetch_by_ids([new_id], requester_user_id=None)
     assert rows and rows[0].intent == "question"
     assert rows[0].run_id == "abc"
     snap = await mgr.stats(faiss_indexed=0)

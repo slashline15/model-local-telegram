@@ -225,7 +225,11 @@ class ContrastiveRAG:
         history_id_set = {r.id for r in history_rows}
         candidate_ids = [iid for iid in sorted_iids if iid not in history_id_set]
 
-        rows = await self._sqlite.fetch_by_ids(candidate_ids)
+        # ACL: só carrega interações públicas ou do próprio user_id.
+        # user_id=None aqui = bypass intencional (teste/admin).
+        rows = await self._sqlite.fetch_by_ids(
+            candidate_ids, requester_user_id=user_id
+        )
         # Mantém a ordem de score_final.
         row_by_id = {r.id: r for r in rows}
         rows_sorted = [row_by_id[iid] for iid in candidate_ids if iid in row_by_id]
@@ -299,6 +303,12 @@ class ContrastiveRAG:
             embedding_model=self._embedding_model,
         )
 
-    async def debug_recall(self, user_message: str) -> RagBundle:
-        """Mesma lógica de `build`, exposta para o comando /recall."""
-        return await self.build(user_message)
+    async def debug_recall(
+        self, user_message: str, *, user_id: int | None = None
+    ) -> RagBundle:
+        """Mesma lógica de `build`, exposta para o comando /recall.
+
+        Propaga user_id pro filtro de visibilidade — sem ele, /recall vazaria
+        interações privadas de outros usuários nos snippets.
+        """
+        return await self.build(user_message, user_id=user_id)

@@ -446,15 +446,15 @@ async def _show_interaction_by_code(
     *,
     user_id: int,
 ) -> None:
-    rows = await deps.sqlite.fetch_by_ids([interaction_id])
+    rows = await deps.sqlite.fetch_by_ids(
+        [interaction_id], requester_user_id=user_id
+    )
     if not rows:
+        # Pode ser inexistente OU privada de outro usuário — resposta uniforme
+        # para não vazar a existência de mensagens alheias.
         await msg.reply_text(f"Não encontrei {format_hashtag(interaction_id)}.")
         return
     row = rows[0]
-    if row.user_id != user_id:
-        # Privacidade: cada usuário só vê o próprio histórico via /recall.
-        await msg.reply_text(f"{format_hashtag(interaction_id)} não pertence a você.")
-        return
 
     score = "—" if row.score is None else str(row.score)
     intent = row.intent or "—"
@@ -511,7 +511,9 @@ async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
 
     try:
-        bundle: RagBundle = await deps.rag.debug_recall(query)
+        bundle: RagBundle = await deps.rag.debug_recall(
+            query, user_id=update.effective_user.id
+        )
     except Exception as exc:  # noqa: BLE001
         await update.effective_message.reply_text(f"Erro no recall: {exc}")
         return
@@ -524,7 +526,9 @@ async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # Carrega o conteúdo dos hits para mostrar um trecho de cada um.
     hit_ids = [h.interaction_id for h in bundle.hits[:15]]
-    rows = await deps.sqlite.fetch_by_ids(hit_ids)
+    rows = await deps.sqlite.fetch_by_ids(
+        hit_ids, requester_user_id=update.effective_user.id
+    )
     by_id = {r.id: r for r in rows}
 
     bucket_icon = {"positive": "🟢", "negative": "⭕", "neutral": "🔵"}

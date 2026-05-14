@@ -126,7 +126,7 @@ async def test_interaction_records_project_id(sqlite_mgr: SQLiteManager) -> None
         error=None, run_id=None,
         project_id=proj.id,
     )
-    rows = await sqlite_mgr.fetch_by_ids([iid])
+    rows = await sqlite_mgr.fetch_by_ids([iid], requester_user_id=None)
     assert rows and rows[0].id == iid
     # `project_id` ainda não está no dataclass Interaction; checagem direta no DB.
     import sqlite3
