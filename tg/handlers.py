@@ -354,27 +354,56 @@ async def _consume_invite(
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None:
         return
-    await update.effective_message.reply_text(
-        "<b>Obras & convites</b>\n"
-        "/obras            – suas obras\n"
-        "/obra #UID        – escolher obra ativa\n"
-        "/obra             – ver obra ativa\n"
-        "/criar_obra <nome> – criar obra (admin global)\n"
-        "/invite <role>    – convidar pra obra ativa\n"
-        "/membros          – membros da obra ativa\n\n"
-        "<b>Conversa</b>\n"
-        "/config   – modelo + temperatura\n"
-        "/stats    – estatísticas globais\n"
-        "/recall &lt;texto&gt; – debug do RAG\n"
-        "/recall #i&lt;id&gt;   – abre interação\n"
-        "/history [n]      – suas n últimas interações\n"
-        "/reminders        – seus lembretes\n"
-        "/ping     – health Ollama\n"
-        "/whoami   – seu cadastro\n"
-        "/reset    – config ao padrão\n\n"
-        "Mande texto / foto / documento / áudio.",
-        parse_mode=ParseMode.HTML,
+    # Texto puro — sem parse_mode pra evitar BadRequest silencioso por
+    # caractere especial. Telegram renderiza mesmo assim.
+    texto = (
+        "📒 Bot RDO — comandos disponíveis\n"
+        "\n"
+        "── Obras & convites ──\n"
+        "/obras                   suas obras (clique pra ativar)\n"
+        "/obra #UID               ativar uma obra\n"
+        "/criar_obra <nome>       criar obra (admin global)\n"
+        "/invite <role>           convidar pra obra ativa\n"
+        "/membros                 membros da obra ativa\n"
+        "\n"
+        "── Cadastro estrutural (admin da obra) ──\n"
+        "/funcoes                 catálogo de funções\n"
+        "/empresas                empresas da obra\n"
+        "/empresa add Nome[; CNPJ[; own|third]]\n"
+        "/colabs [função]         colaboradores\n"
+        "/colab add Nome; Função; Empresa[; Apelido]\n"
+        "\n"
+        "── Diário da obra (qualquer membro) ──\n"
+        "/clima sol|nublado|chuva [HH:MM-HH:MM]\n"
+        "/climas                  últimos registros climáticos\n"
+        "/efetivo Função qtd [Empresa]   (também aceita ; entre campos)\n"
+        "/efetivos [--data 2026-05-12]\n"
+        "/atividade Descrição; estado    estado: concluida|em_andamento|atrasada|impedida\n"
+        "/atividades\n"
+        "/anotacao <texto livre>\n"
+        "/anotacoes\n"
+        "/rdo [YYYY-MM-DD]        consolidação do dia\n"
+        "\n"
+        "── Conversa & IA ──\n"
+        "/config                  modelo + temperatura\n"
+        "/stats                   estatísticas globais\n"
+        "/recall <texto>          debug do RAG\n"
+        "/recall #i<id>           abre uma interação\n"
+        "/history [n]             suas n últimas mensagens\n"
+        "/reminders               seus lembretes\n"
+        "/ping                    health Ollama\n"
+        "/whoami                  seu cadastro\n"
+        "/reset                   config ao padrão\n"
+        "\n"
+        "── Debug (superadmin) ──\n"
+        "/consumo /consumo_usuario /consumo_obra /consumo_modelo /status\n"
+        "\n"
+        "Dicas:\n"
+        "• Mande texto / foto / documento / áudio livremente.\n"
+        "• Comandos de cadastro usam a obra ativa (veja /obras).\n"
+        "• Use --data YYYY-MM-DD no final pra registrar em dia passado."
     )
+    await update.effective_message.reply_text(texto)
 
 
 @require_active_user
@@ -960,6 +989,27 @@ async def _process_user_input(
             decision = _AGENT_ROUTER.decide(tags + [intent])
             s.set(route=decision.route.value, reason=decision.reason)
 
+        # Monta contexto da obra ativa pra injetar no system_prompt.
+        # Sem isso, a IA "esquece" em que obra estamos e não consegue responder
+        # perguntas como "qual obra estamos?" ou citar o nome da obra na resposta.
+        obra_context: str | None = None
+        active_project_id = (
+            user_settings.current_project_id if user_settings else None
+        )
+        if active_project_id is not None:
+            proj = await deps.sqlite.projects.get_by_id(active_project_id)
+            if proj is not None:
+                obra_context = (
+                    f"Obra ativa: {proj.name} (#{proj.uid}).\n"
+                    f"Use esse nome quando o usuário perguntar a obra. "
+                    f"Os comandos /clima, /efetivo, /atividade, /anotacao e "
+                    f"/rdo gravam diretamente no banco dessa obra — quando o "
+                    f"usuário pedir pra registrar algo do diário, oriente-o "
+                    f"a usar esses comandos (cite o exemplo curto). Você "
+                    f"NÃO escreve direto no banco pelo chat; quem grava são "
+                    f"os comandos."
+                )
+
         async with rec.step(
             "rag_build",
             top_k=deps.settings.rag_top_k,
@@ -969,12 +1019,11 @@ async def _process_user_input(
             bundle = await deps.rag.build(
                 text,
                 user_id=user_id,
-                project_id=(
-                    user_settings.current_project_id if user_settings else None
-                ),
+                project_id=active_project_id,
                 n_recent_history=deps.settings.rag_recent_history,
                 intent=intent,
                 now_iso=_now_local_iso(),
+                obra_context=obra_context,
             )
             s.set(
                 hits=len(bundle.hits),

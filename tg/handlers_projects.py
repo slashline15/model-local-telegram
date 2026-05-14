@@ -8,8 +8,13 @@ import uuid
 from html import escape
 from typing import TYPE_CHECKING
 
-from telegram import Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from core.logger import get_logger
@@ -106,8 +111,10 @@ async def cmd_obras(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cur_id = settings.current_project_id
 
     lines = ["<b>🏗 Suas obras</b>\n"]
+    buttons: list[list[InlineKeyboardButton]] = []
     for p in projects:
-        marker = "▶ " if p.id == cur_id else "  "
+        is_active = p.id == cur_id
+        marker = "▶ " if is_active else "  "
         member = await deps.sqlite.members.get(project_id=p.id, user_id=user.id)
         role = member.role if member else "—"
         admin_mark = " (admin)" if p.admin_id == user.id else ""
@@ -115,9 +122,74 @@ async def cmd_obras(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"{marker}<code>#{escape(p.uid)}</code> · {escape(p.name)} "
             f"· papel: <i>{escape(role)}{admin_mark}</i>"
         )
-    lines.append("\nDefina ativa: <code>/obra #UID</code>")
+        label = ("✅ " if is_active else "▶ ") + p.name
+        buttons.append([
+            InlineKeyboardButton(label, callback_data=f"obra:set:{p.uid}")
+        ])
+    lines.append("\nClique pra ativar (ou use <code>/obra #UID</code>):")
 
-    await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+    await msg.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+# Callback do /obras: ativa a obra clicada.
+@require_active_user
+async def on_obra_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    # data = "obra:set:<UID>"
+    try:
+        _, _, target_uid = query.data.split(":", 2)
+    except ValueError:
+        await query.answer("Callback inválido.")
+        return
+
+    deps = _deps(context)
+    user = get_bot_user(context)
+    proj = await deps.sqlite.projects.get_by_uid(target_uid)
+    if proj is None:
+        await query.answer("Obra não encontrada.", show_alert=True)
+        return
+    member = await deps.sqlite.members.get(project_id=proj.id, user_id=user.id)
+    if member is None and user.role != "superadmin":
+        await query.answer("Você não é membro dessa obra.", show_alert=True)
+        return
+
+    await deps.sqlite.settings.set_current_project(user.telegram_id, proj.id)
+    await query.answer(f"Obra ativa: {proj.name}")
+
+    # Redesenha a lista pra refletir a marcação ▶ / ✅.
+    projects = await deps.sqlite.projects.list_for_user(user.id, status=None)
+    lines = ["<b>🏗 Suas obras</b>\n"]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for p in projects:
+        is_active = p.id == proj.id
+        marker = "▶ " if is_active else "  "
+        m = await deps.sqlite.members.get(project_id=p.id, user_id=user.id)
+        role = m.role if m else "—"
+        admin_mark = " (admin)" if p.admin_id == user.id else ""
+        lines.append(
+            f"{marker}<code>#{escape(p.uid)}</code> · {escape(p.name)} "
+            f"· papel: <i>{escape(role)}{admin_mark}</i>"
+        )
+        label = ("✅ " if is_active else "▶ ") + p.name
+        buttons.append([
+            InlineKeyboardButton(label, callback_data=f"obra:set:{p.uid}")
+        ])
+    lines.append("\nClique pra trocar (ou use <code>/obra #UID</code>):")
+    try:
+        await query.edit_message_text(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+    except BadRequest:
+        # Mensagem inalterada (clique no que já estava ativo) — silencia.
+        pass
 
 
 # ────────────────── /obra (sem args = mostra; com #UID = define) ──────────────────

@@ -73,6 +73,37 @@ def _parse_hora_range(text: str) -> tuple[str | None, str | None]:
     return m.group(1), m.group(2)
 
 
+def _parse_efetivo_args(args_raw: str) -> tuple[str, str, str | None] | None:
+    """Aceita `Função; qtd[; Empresa]` ou `Função qtd` (último token numérico).
+
+    Retorna (funcao_nome, qtd_raw, empresa_ref) ou None se inválido.
+    """
+    parts = [p.strip() for p in args_raw.split(";") if p.strip()]
+    if len(parts) >= 2:
+        funcao = parts[0]
+        qtd = parts[1]
+        empresa = parts[2] if len(parts) >= 3 else None
+        return funcao, qtd, empresa
+    tokens = args_raw.split()
+    if len(tokens) >= 2 and tokens[-1].lstrip("-").isdigit():
+        return " ".join(tokens[:-1]), tokens[-1], None
+    return None
+
+
+def _parse_atividade_args(args_raw: str) -> tuple[str, str] | None:
+    """Aceita `Descrição; estado` ou `Descrição <estado>` (último token).
+
+    Retorna (descricao, estado_raw) ou None se inválido.
+    """
+    parts = [p.strip() for p in args_raw.split(";") if p.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    tokens = args_raw.rsplit(maxsplit=1)
+    if len(tokens) == 2 and tokens[0].strip() and tokens[1].strip():
+        return tokens[0].strip(), tokens[1].strip()
+    return None
+
+
 # ────────────────── /clima ──────────────────
 
 @require_active_project
@@ -176,23 +207,22 @@ async def cmd_efetivo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not args_raw:
         await msg.reply_text(
             "Uso: <code>/efetivo Função; qtd[; Empresa]</code>\n"
-            "Exemplo: <code>/efetivo Pedreiro; 5; Construtora X</code>",
+            "Exemplo: <code>/efetivo Pedreiro 5</code> ou "
+            "<code>/efetivo Pedreiro; 5; Construtora X</code>",
             parse_mode=ParseMode.HTML,
         )
         return
 
     args_raw, dia = _extract_data_override(args_raw)
-    parts = [p.strip() for p in args_raw.split(";")]
-    if len(parts) < 2 or not parts[0] or not parts[1]:
+    parsed = _parse_efetivo_args(args_raw)
+    if parsed is None:
         await msg.reply_text(
-            "Faltou campo. <code>Função; qtd</code> são obrigatórios.",
+            "Não entendi. Use <code>/efetivo Pedreiro 5</code> ou "
+            "<code>/efetivo Pedreiro; 5; Empresa</code>.",
             parse_mode=ParseMode.HTML,
         )
         return
-
-    funcao_nome = parts[0]
-    qtd_raw = parts[1]
-    empresa_ref = parts[2] if len(parts) > 2 and parts[2] else None
+    funcao_nome, qtd_raw, empresa_ref = parsed
 
     try:
         qtd = int(qtd_raw)
@@ -305,17 +335,17 @@ async def cmd_atividade(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     args_raw, dia = _extract_data_override(args_raw)
-    parts = [p.strip() for p in args_raw.split(";")]
-    if len(parts) < 2 or not parts[0] or not parts[1]:
+    parsed = _parse_atividade_args(args_raw)
+    if parsed is None:
         await msg.reply_text(
-            "Faltou campo. <code>Descrição; estado</code> são obrigatórios.",
+            "Não entendi. Use <code>/atividade Concretagem laje; em_andamento</code> "
+            "ou <code>/atividade Pintura sala 3 concluida</code>.",
             parse_mode=ParseMode.HTML,
         )
         return
-
-    descricao = parts[0]
+    descricao, estado_raw = parsed
     try:
-        estado = normalizar_estado(parts[1])
+        estado = normalizar_estado(estado_raw)
     except StorageError as exc:
         await msg.reply_text(str(exc))
         return

@@ -58,10 +58,15 @@ class FewShotExample:
 def build_system_prompt(
     now_iso: str | None = None,
     style_directive: str = "",
+    obra_context: str | None = None,
 ) -> str:
     parts: list[str] = [_SYSTEM_PROMPT_BASE]
     if now_iso:
         parts.append(f"Data/hora atual: {now_iso}")
+    if obra_context and obra_context.strip():
+        parts.append(
+            "CONTEXTO DE OBRA (operacional):\n" + obra_context.strip()
+        )
     if style_directive.strip():
         parts.append(
             "Preferências do usuário (siga à risca):\n" + style_directive.strip()

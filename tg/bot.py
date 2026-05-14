@@ -191,6 +191,7 @@ def build_application(deps: BotDependencies) -> Application:
     app.add_handler(CallbackQueryHandler(callbacks.on_rate, pattern=r"^rate:"))
     app.add_handler(CallbackQueryHandler(callbacks.on_config, pattern=r"^cfg:"))
     app.add_handler(CallbackQueryHandler(callbacks.on_reminder_cancel, pattern=r"^rem:cancel:"))
+    app.add_handler(CallbackQueryHandler(handlers_projects.on_obra_select, pattern=r"^obra:set:"))
 
     # Comandos de debug — superadmin only.
     app.add_handler(CommandHandler("consumo",          handlers_debug.cmd_consumo))

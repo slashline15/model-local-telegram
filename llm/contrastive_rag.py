@@ -122,9 +122,12 @@ class ContrastiveRAG:
         intent: str | None = None,
         now_iso: str | None = None,
         style_directive: str = "",
+        obra_context: str | None = None,
     ) -> RagBundle:
         system_prompt = build_system_prompt(
-            now_iso=now_iso, style_directive=style_directive
+            now_iso=now_iso,
+            style_directive=style_directive,
+            obra_context=obra_context,
         )
 
         # 1) Histórico cronológico (independente do FAISS).
