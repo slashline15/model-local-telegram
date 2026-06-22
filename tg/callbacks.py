@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 
 from core.logger import get_logger
 from tg.kb import (
+    awaiting_correction_keyboard,
     clima_keyboard,
     confirm_rdo_keyboard,
     feedback_comment_keyboard,
@@ -105,7 +106,20 @@ async def on_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if action == "comment":
         context.user_data["awaiting_correction"] = interaction_id
         await query.answer(text="Envie seu comentário agora.", show_alert=False)
-        await _safe_edit_text(query, "Aguardando seu comentário...")
+        # Mantém o texto original — só troca o teclado pelo de cancelamento.
+        try:
+            await query.edit_message_reply_markup(
+                reply_markup=awaiting_correction_keyboard(interaction_id)
+            )
+        except BadRequest as exc:
+            if "not modified" not in str(exc).lower():
+                log.warning("Falha ao trocar teclado p/ cancelamento: %s", exc)
+        if query.message is not None:
+            await query.message.reply_text("💬 Envie seu comentário agora:")
+    elif action == "cancel":
+        context.user_data.pop("awaiting_correction", None)
+        await query.answer(text="Cancelado.", show_alert=False)
+        await _safe_clear_keyboard(query)
     elif action == "skip":
         await query.answer(show_alert=False)
         await _safe_clear_keyboard(query)

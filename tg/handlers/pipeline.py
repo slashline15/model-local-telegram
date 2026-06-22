@@ -318,8 +318,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     text = msg.text.strip()
 
-    # Intercepta awaiting_correction (feedback ruim)
-    if context.user_data.get("awaiting_correction"):
+    # Intercepta awaiting_correction (feedback ruim) — ignora comandos.
+    if context.user_data.get("awaiting_correction") and not text.startswith("/"):
         iid = context.user_data.pop("awaiting_correction")
         deps = _deps(context)
         await deps.sqlite.set_correction(iid, text)
@@ -331,8 +331,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _handle_rdo_text_input(update, context, text)
         return
 
-    # Menu RDO inline
-    if text.lower() == "menu":
+    # Menu RDO inline (botão persistente ou texto)
+    if text.lower().strip().lstrip("📋").strip() == "menu":
         from tg.kb import rdo_menu_keyboard
         await msg.reply_text("📋 RDO do dia:", reply_markup=rdo_menu_keyboard())
         return

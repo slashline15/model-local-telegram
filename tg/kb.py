@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 
 def rating_keyboard(interaction_id: int) -> InlineKeyboardMarkup:
@@ -20,6 +25,22 @@ def feedback_comment_keyboard(interaction_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("✏️ Comentar agora", callback_data=f"fb:comment:{interaction_id}"),
         InlineKeyboardButton("Pular",              callback_data=f"fb:skip:{interaction_id}"),
     ]])
+
+
+def awaiting_correction_keyboard(interaction_id: int) -> InlineKeyboardMarkup:
+    """Botão de cancelamento enquanto aguarda o comentário de correção."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("❌ Cancelar comentário", callback_data=f"fb:cancel:{interaction_id}"),
+    ]])
+
+
+def main_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Teclado persistente com atalho para o menu RDO."""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("📋 Menu")]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
 
 
 def rdo_menu_keyboard() -> InlineKeyboardMarkup:

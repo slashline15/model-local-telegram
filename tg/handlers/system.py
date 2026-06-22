@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
+from tg.kb import main_reply_keyboard
 
 from core.logger import get_logger
 from core.permissions import (
@@ -75,8 +76,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             log.warning("Bootstrap: %s promovido a superadmin.", tg_user.id)
             await msg.reply_text(
                 "🎖 Você foi registrado como <b>superadmin</b>. "
-                "Use /criar_obra pra começar.",
+                "Use /criar_obra pra começar.\n\n"
+                "O botão <b>📋 Menu</b> abre o RDO do dia.",
                 parse_mode=ParseMode.HTML,
+                reply_markup=main_reply_keyboard(),
             )
             return
         await msg.reply_text(
@@ -85,7 +88,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    await msg.reply_text(_WELCOME_TEXT)
+    await msg.reply_text(_WELCOME_TEXT, reply_markup=main_reply_keyboard())
 
 
 async def _consume_invite(
@@ -150,8 +153,9 @@ async def _consume_invite(
     await msg.reply_text(
         f"✅ Bem-vindo! Você entrou em <b>{escape(proj_name)}</b> "
         f"<code>#{escape(proj_uid)}</code> como <i>{escape(invite.role)}</i>.\n\n"
-        f"{_WELCOME_TEXT}",
+        f"O botão <b>📋 Menu</b> abre o RDO do dia.",
         parse_mode=ParseMode.HTML,
+        reply_markup=main_reply_keyboard(),
     )
 
 
