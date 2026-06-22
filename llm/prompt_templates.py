@@ -52,7 +52,8 @@ TAG_GENERATOR_SYSTEM: str = (
 class FewShotExample:
     user_message: str
     bot_response: str
-    code: str | None = None  # ex.: "i42" — para citação rastreável no prompt
+    code: str | None = None       # ex.: "i42" — para citação rastreável no prompt
+    correction: str | None = None  # por que essa resposta foi marcada como ruim
 
 
 def build_system_prompt(
@@ -90,11 +91,14 @@ def _examples_block(items: list[FewShotExample]) -> str:
         header = f"Exemplo {i}"
         if ex.code:
             header += f" [memória #{ex.code}]"
-        chunks.append(
+        entry = (
             f"{header}:\n"
             f"  Usuário: {_truncate(ex.user_message)}\n"
             f"  Resposta: {_truncate(ex.bot_response)}"
         )
+        if ex.correction:
+            entry += f"\n  Motivo a evitar: {_truncate(ex.correction, 200)}"
+        chunks.append(entry)
     return "\n\n".join(chunks)
 
 

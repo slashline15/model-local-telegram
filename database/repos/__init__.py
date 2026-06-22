@@ -5,6 +5,7 @@ from database.repos.atividades import AtividadesRepo
 from database.repos.chunks import ChunksRepo
 from database.repos.clima import ClimaRepo
 from database.repos.colaboradores import ColaboradoresRepo
+from database.repos.cronograma import CronogramaEtapasRepo
 from database.repos.efetivo import EfetivoRepo
 from database.repos.empresas import EmpresasRepo
 from database.repos.funcoes import FuncoesRepo
@@ -25,6 +26,7 @@ __all__ = [
     "ChunksRepo",
     "ClimaRepo",
     "ColaboradoresRepo",
+    "CronogramaEtapasRepo",
     "EfetivoRepo",
     "EmpresasRepo",
     "FuncoesRepo",

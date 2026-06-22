@@ -43,6 +43,7 @@ from database.repos import (
     ChunksRepo,
     ClimaRepo,
     ColaboradoresRepo,
+    CronogramaEtapasRepo,
     EfetivoRepo,
     EmpresasRepo,
     FuncoesRepo,
@@ -89,6 +90,7 @@ class SQLiteManager:
         self.efetivo = EfetivoRepo(db_path)
         self.atividades = AtividadesRepo(db_path)
         self.anotacoes = AnotacoesRepo(db_path)
+        self.cronograma = CronogramaEtapasRepo(db_path)
 
     async def init_schema(self) -> None:
         await _init_schema(self._db_path)
@@ -140,6 +142,9 @@ class SQLiteManager:
 
     async def update_score(self, interaction_id: int, score: int) -> None:
         await self.interactions.update_score(interaction_id, score)
+
+    async def set_correction(self, interaction_id: int, text: str) -> None:
+        await self.interactions.set_correction(interaction_id, text)
 
     async def fetch_by_ids(
         self,

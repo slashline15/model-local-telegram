@@ -68,7 +68,7 @@ async def test_separates_positive_and_negative(
     pos_id = await _seed(sqlite_mgr, faiss_mgr, content="alvo", score=5)
     neg_id = await _seed(sqlite_mgr, faiss_mgr, content="alvo_ruim", score=1)
     await _seed(sqlite_mgr, faiss_mgr, content="distractor1", score=None)
-    await _seed(sqlite_mgr, faiss_mgr, content="distractor2", score=3)
+    await _seed(sqlite_mgr, faiss_mgr, content="distractor2", score=None)
 
     rag = ContrastiveRAG(
         ollama=FakeOllama(),  # type: ignore[arg-type]

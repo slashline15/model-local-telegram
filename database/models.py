@@ -33,6 +33,7 @@ class Interaction:
     tool_calls: list[dict[str, Any]]
     error: str | None
     run_id: str | None
+    correction: str | None = None  # texto do usuário explicando o que o modelo errou
     visibilidade: str = "publica"  # publica | privada — controle de leitura cruzada
 
 
@@ -269,6 +270,20 @@ class Atividade:
     descricao: str
     interaction_id: int | None
     criado_por: int
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class CronogramaEtapa:
+    id: int
+    uid: str
+    project_id: int
+    parent_id: int | None
+    etapa: str
+    descricao: str | None
+    data_prevista_inicio: str | None
+    data_prevista_termino: str | None
+    ordem: int
     created_at: str
 
 

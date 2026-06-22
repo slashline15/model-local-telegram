@@ -79,12 +79,20 @@ class InteractionsRepo(BaseRepo):
             raise StorageError(f"Falha ao inserir interação: {exc}") from exc
 
     async def update_score(self, interaction_id: int, score: int) -> None:
-        if not 1 <= score <= 5:
-            raise StorageError(f"Score inválido (esperado 1..5): {score}")
+        if score not in (1, 5):
+            raise StorageError(f"Score inválido (esperado 1=ruim ou 5=bom): {score}")
         async with aiosqlite.connect(self._db_path) as conn:
             await conn.execute(
                 "UPDATE interactions SET score = ? WHERE id = ?",
                 (score, interaction_id),
+            )
+            await conn.commit()
+
+    async def set_correction(self, interaction_id: int, text: str) -> None:
+        async with aiosqlite.connect(self._db_path) as conn:
+            await conn.execute(
+                "UPDATE interactions SET correction = ? WHERE id = ?",
+                (text.strip(), interaction_id),
             )
             await conn.commit()
 
@@ -230,5 +238,6 @@ def _row_to_interaction(row: aiosqlite.Row) -> Interaction:
         tool_calls=[x for x in _json_list("tool_calls") if isinstance(x, dict)],
         error=_opt("error"),
         run_id=_opt("run_id"),
+        correction=_opt("correction"),
         visibilidade=str(_opt("visibilidade") or "publica"),
     )

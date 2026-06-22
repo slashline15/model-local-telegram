@@ -26,6 +26,7 @@ def _to_example(row: Interaction) -> FewShotExample:
         user_message=row.user_message,
         bot_response=row.bot_response,
         code=format_code(row.id),
+        correction=row.correction,
     )
 
 log = get_logger(__name__)

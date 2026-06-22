@@ -25,6 +25,7 @@ from scripts.bootstrap_check import (
 from tg.bot import BotDependencies, build_application
 from tg.debug_notifier import DebugNotifier
 from tools import reminders as reminder_tools
+from tools import rdo_tools
 from tools import web_search
 from tools.registry import ToolRegistry
 
@@ -89,6 +90,7 @@ async def _bootstrap() -> BotDependencies:
     registry = ToolRegistry()
     web_search.register(registry)
     reminder_tools.register(registry, manager=reminders)
+    rdo_tools.register(registry)
 
     transcriber: WhisperTranscriber | None = None
     openai_chat: OpenAIChatClient | None = None

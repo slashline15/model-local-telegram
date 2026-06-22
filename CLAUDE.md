@@ -13,12 +13,16 @@ refundação ativa (Fase 4, plano em 8 passos).
 - `docs/archive/` — histórico (transcripts, planos superados, DDL antigo).
   Não leia sem necessidade.
 
+## Banco de dados (política de dev)
+
+`data/bot.db` pode ser apagado livremente para evitar retrabalho com migrations.
+`data/backups/` é preservado sempre. Sem cerimônia até aviso contrário.
+
 ## Pastas
 
-- `tg/` — Telegram. `handlers.py` (pipeline principal), `handlers_projects.py`
-  (obras/convites), `handlers_rdo.py` (funcoes/empresas/colabs),
-  `handlers_obra.py` (clima/efetivo/atividade/anotacao/rdo),
-  `handlers_debug.py` (consumo).
+- `tg/` — Telegram. `handlers/` (pacote — pipeline, system, recall, feedback,
+  projects, rdo/, debug). `kb.py` fábrica de teclados inline. `callbacks.py`
+  (rate, feedback, rdo, config, rem). Slash commands são aliases ocultos.
 - `llm/` — Ollama client, `contrastive_rag.py` (montagem do prompt),
   `prompt_templates.py`.
 - `database/` — schema, `sqlite_mgr.py` (fachada), `repos/` (CRUD por tabela),
@@ -46,5 +50,7 @@ python main.py                    # bot real (precisa Ollama + token)
 
 ## Plano em curso
 
-Fase 4 (refundação 2026-05). Próximo passo: comando `/doc` real com ACL.
+Fase 4 (refundação 2026-05). MVP inline concluído (2026-06):
+feedback binário + menu RDO + tools de RDO + chunking semântico + cronograma MVP.
+Próximo passo: comando `/doc` real com ACL.
 Status detalhado em `ROADMAP.md` na tabela "Plano de transição".

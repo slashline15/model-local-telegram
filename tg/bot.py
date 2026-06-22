@@ -11,11 +11,7 @@ from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     Application,
     ApplicationBuilder,
-    CallbackQueryHandler,
-    CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 from telegram.request import HTTPXRequest
 
@@ -30,15 +26,8 @@ from llm.intent_classifier import IntentClassifier
 from llm.ollama_client import OllamaClient
 from llm.openai_chat_client import OpenAIChatClient
 from llm.tag_generator import TagGenerator
-from tg import (
-    callbacks,
-    handlers,
-    handlers_debug,
-    handlers_obra,
-    handlers_projects,
-    handlers_rdo,
-)
 from tg.debug_notifier import DebugNotifier
+from tg.handlers import register_all_handlers
 from tools.registry import ToolRegistry
 
 log = get_logger(__name__)
@@ -149,56 +138,7 @@ def build_application(deps: BotDependencies) -> Application:
 
     app.bot_data["deps"] = deps
     app.add_error_handler(_on_error)
-
-    app.add_handler(CommandHandler("start",      handlers.cmd_start))
-    app.add_handler(CommandHandler("help",       handlers.cmd_help))
-    app.add_handler(CommandHandler("config",     handlers.cmd_config))
-    app.add_handler(CommandHandler("stats",      handlers.cmd_stats))
-    app.add_handler(CommandHandler("recall",     handlers.cmd_recall))
-    app.add_handler(CommandHandler("history",    handlers.cmd_history))
-    app.add_handler(CommandHandler("ping",       handlers.cmd_ping))
-    app.add_handler(CommandHandler("whoami",     handlers.cmd_whoami))
-    app.add_handler(CommandHandler("reset",      handlers.cmd_reset))
-    app.add_handler(CommandHandler("reminders",  handlers.cmd_reminders))
-
-    app.add_handler(CommandHandler("criar_obra", handlers_projects.cmd_criar_obra))
-    app.add_handler(CommandHandler("obras",      handlers_projects.cmd_obras))
-    app.add_handler(CommandHandler("obra",       handlers_projects.cmd_obra))
-    app.add_handler(CommandHandler("invite",     handlers_projects.cmd_invite))
-    app.add_handler(CommandHandler("membros",    handlers_projects.cmd_membros))
-
-    app.add_handler(CommandHandler("funcoes",    handlers_rdo.cmd_funcoes))
-    app.add_handler(CommandHandler("empresas",   handlers_rdo.cmd_empresas))
-    app.add_handler(CommandHandler("empresa",    handlers_rdo.cmd_empresa))
-    app.add_handler(CommandHandler("colabs",     handlers_rdo.cmd_colabs))
-    app.add_handler(CommandHandler("colab",      handlers_rdo.cmd_colab))
-
-    app.add_handler(CommandHandler("clima",       handlers_obra.cmd_clima))
-    app.add_handler(CommandHandler("climas",      handlers_obra.cmd_climas))
-    app.add_handler(CommandHandler("efetivo",     handlers_obra.cmd_efetivo))
-    app.add_handler(CommandHandler("efetivos",    handlers_obra.cmd_efetivos))
-    app.add_handler(CommandHandler("atividade",   handlers_obra.cmd_atividade))
-    app.add_handler(CommandHandler("atividades",  handlers_obra.cmd_atividades))
-    app.add_handler(CommandHandler("anotacao",    handlers_obra.cmd_anotacao))
-    app.add_handler(CommandHandler("anotacoes",   handlers_obra.cmd_anotacoes))
-    app.add_handler(CommandHandler("rdo",         handlers_obra.cmd_rdo))
-
-    app.add_handler(MessageHandler(filters.PHOTO, handlers.on_photo))
-    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handlers.on_voice))
-    app.add_handler(MessageHandler(filters.Document.ALL, handlers.on_document))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.on_text))
-
-    app.add_handler(CallbackQueryHandler(callbacks.on_rate, pattern=r"^rate:"))
-    app.add_handler(CallbackQueryHandler(callbacks.on_config, pattern=r"^cfg:"))
-    app.add_handler(CallbackQueryHandler(callbacks.on_reminder_cancel, pattern=r"^rem:cancel:"))
-    app.add_handler(CallbackQueryHandler(handlers_projects.on_obra_select, pattern=r"^obra:set:"))
-
-    # Comandos de debug — superadmin only.
-    app.add_handler(CommandHandler("consumo",          handlers_debug.cmd_consumo))
-    app.add_handler(CommandHandler("consumo_usuario",  handlers_debug.cmd_consumo_usuario))
-    app.add_handler(CommandHandler("consumo_obra",     handlers_debug.cmd_consumo_obra))
-    app.add_handler(CommandHandler("consumo_modelo",   handlers_debug.cmd_consumo_modelo))
-    app.add_handler(CommandHandler("status",           handlers_debug.cmd_status))
+    register_all_handlers(app)
 
     return app
 
