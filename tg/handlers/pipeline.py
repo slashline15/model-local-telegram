@@ -739,14 +739,16 @@ async def _process_user_input(
                 duration_ms=chat_result.total_duration_ms or 0,
             )
 
-        # Verifica se alguma tool retornou pending_rdo (registro a confirmar)
-        for _inv in tool_invocations:
-            _result = _inv.get("result", {})
-            if isinstance(_result, dict) and _result.get("action") == "pending_rdo":
-                _pending_rdo = _result
-                break
-        if _pending_rdo is not None:
-            context.user_data["pending_rdo"] = _pending_rdo
+        # Coleta TODOS os pending_rdo das tool invocations (pode haver vários).
+        _pending_rdo_list = [
+            _inv["result"]
+            for _inv in tool_invocations
+            if isinstance(_inv.get("result"), dict)
+            and _inv["result"].get("action") == "pending_rdo"
+        ]
+        if _pending_rdo_list:
+            context.user_data["pending_rdo_list"] = _pending_rdo_list
+            _pending_rdo = _pending_rdo_list  # truthy → aciona UI de confirmação
 
         async with rec.step("save_interaction") as s:
             interaction_id = await deps.sqlite.insert_interaction(
@@ -838,12 +840,14 @@ async def _process_user_input(
             tagged = f"{cleaned}\n\n─ {format_hashtag(interaction_id)}"
             if _pending_rdo is not None:
                 from tg.kb import confirm_rdo_keyboard
-                rdo_type = _pending_rdo.get("type", "registro")
+                _items: list = _pending_rdo if isinstance(_pending_rdo, list) else [_pending_rdo]
+                _rdo_type = _items[0].get("type", "registro") if _items else "registro"
                 await _safe_reply(
                     msg, tagged,
                     reply_markup=confirm_rdo_keyboard(
-                        confirm_data=f"rdo:confirm:{rdo_type}",
-                        skip_data=f"rdo:skip:{rdo_type}",
+                        confirm_data=f"rdo:confirm:{_rdo_type}",
+                        skip_data=f"rdo:skip:{_rdo_type}",
+                        count=len(_items),
                     ),
                 )
             else:

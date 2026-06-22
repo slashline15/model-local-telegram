@@ -188,15 +188,23 @@ async def on_rdo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # ── confirmação de pending_rdo (via IA ou foto) ────────────────────────
     elif section == "confirm":
-        pending = context.user_data.pop("pending_rdo", None)
-        if pending is None:
+        pending_list: list | None = context.user_data.pop("pending_rdo_list", None)
+        pending_single = context.user_data.pop("pending_rdo", None)
+
+        items = pending_list or ([pending_single] if pending_single else [])
+        if not items:
             await _safe_edit_text(query, "Nada pendente para confirmar.")
             return
-        await _save_pending_rdo(query, context, deps, pending)
+
+        if len(items) == 1:
+            await _save_pending_rdo(query, context, deps, items[0])
+        else:
+            await _save_pending_rdo_batch(query, context, deps, items)
 
     elif section == "skip":
+        context.user_data.pop("pending_rdo_list", None)
         context.user_data.pop("pending_rdo", None)
-        await _safe_edit_text(query, "❌ Registro descartado.")
+        await _safe_edit_text(query, "❌ Registros descartados.")
 
     elif section == "pending" and payload == "ajustar":
         pending = context.user_data.get("pending_rdo")
@@ -276,6 +284,75 @@ async def _save_pending_rdo(
     except Exception as exc:
         log.exception("Falha ao salvar pending_rdo tipo=%s", rdo_type)
         await _safe_edit_text(query, f"Erro ao registrar: {exc}")
+
+
+async def _save_pending_rdo_batch(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    deps: "BotDependencies",
+    items: list[dict],
+) -> None:
+    """Persiste uma lista de pending_rdo de uma vez."""
+    from tg.middleware import get_bot_project, get_bot_user
+    try:
+        project = get_bot_project(context)
+        user = get_bot_user(context)
+    except Exception:
+        await _safe_edit_text(query, "Obra ativa não encontrada. Use /obras.")
+        return
+
+    dia_default = datetime.now().astimezone().strftime("%Y-%m-%d")
+    saved = 0
+    erros: list[str] = []
+
+    for item in items:
+        dia = item.get("dia") or dia_default
+        rdo_type = item.get("type")
+        try:
+            if rdo_type == "atividade":
+                await deps.sqlite.atividades.insert(
+                    project_id=project.id, dia=dia,
+                    estado=item.get("estado", "em_andamento"),
+                    descricao=item["descricao"], criado_por=user.id,
+                )
+                saved += 1
+            elif rdo_type == "clima":
+                await deps.sqlite.clima.insert(
+                    project_id=project.id, dia=dia,
+                    condicao=item["condicao"],
+                    hora_inicio=item.get("hora_inicio"),
+                    hora_fim=item.get("hora_fim"),
+                    criado_por=user.id,
+                )
+                saved += 1
+            elif rdo_type == "efetivo":
+                funcao = await deps.sqlite.funcoes.get_by_nome(item.get("funcao", ""))
+                if funcao:
+                    await deps.sqlite.efetivo.insert(
+                        project_id=project.id, dia=dia,
+                        funcao_id=funcao.id, empresa_id=None,
+                        qtd=int(item.get("qtd", 1)), criado_por=user.id,
+                    )
+                    saved += 1
+                else:
+                    erros.append(f"Função '{item.get('funcao')}' não encontrada")
+            elif rdo_type == "anotacao":
+                await deps.sqlite.anotacoes.insert(
+                    project_id=project.id, dia=dia,
+                    texto=item["texto"], criado_por=user.id,
+                )
+                saved += 1
+        except Exception as exc:
+            log.warning("Falha em item de batch tipo=%s: %s", rdo_type, exc)
+            erros.append(str(exc)[:60])
+
+    if erros:
+        await _safe_edit_text(
+            query,
+            f"✅ {saved} registro(s) salvos.\n⚠️ {len(erros)} erro(s): {erros[0]}"
+        )
+    else:
+        await _safe_edit_text(query, f"✅ {saved} registro(s) salvos — {dia_default}")
 
 
 async def _show_rdo_hoje(

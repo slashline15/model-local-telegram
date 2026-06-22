@@ -36,7 +36,18 @@ _SYSTEM_PROMPT_BASE: str = (
     "local; 'fim do dia' ≈ 18h00; 'amanhã cedo' ≈ 09h00.\n"
     "- Em seguida, na sua resposta, mencione discretamente o agendamento "
     "(ex.: '_te lembro disso depois do almoço._'). Não agende coisas "
-    "óbvias, repetidas ou que o usuário já indicou que não quer."
+    "óbvias, repetidas ou que o usuário já indicou que não quer.\n\n"
+    "RDO DE OBRA:\n"
+    "- Quando identificar dados de obra em fotos ou mensagens, chame "
+    "IMEDIATAMENTE as tools correspondentes — uma chamada por item:\n"
+    "  • atividade → `registrar_atividade` (uma call por atividade)\n"
+    "  • clima → `registrar_clima`\n"
+    "  • mão de obra → `registrar_efetivo`\n"
+    "  • ocorrência livre → `registrar_anotacao`\n"
+    "- NUNCA peça permissão textual antes de chamar as tools. O sistema já "
+    "exibe botões de confirmação automaticamente após as calls.\n"
+    "- Após as calls, confirme no texto o que foi capturado (ex.: '10 "
+    "atividades enviadas para confirmação.')."
 )
 
 TAG_GENERATOR_SYSTEM: str = (

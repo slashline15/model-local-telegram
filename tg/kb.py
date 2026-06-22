@@ -71,12 +71,14 @@ def clima_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
-def confirm_rdo_keyboard(confirm_data: str, skip_data: str) -> InlineKeyboardMarkup:
-    """Confirmação genérica de um registro RDO extraído de foto/texto."""
+def confirm_rdo_keyboard(
+    confirm_data: str, skip_data: str, count: int = 1
+) -> InlineKeyboardMarkup:
+    """Confirmação de registro(s) RDO extraído(s) de foto/texto."""
+    label = f"✅ Registrar ({count})" if count > 1 else "✅ Registrar"
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Registrar",   callback_data=confirm_data),
-        InlineKeyboardButton("✏️ Ajustar",    callback_data="rdo:pending:ajustar"),
-        InlineKeyboardButton("❌ Ignorar",     callback_data=skip_data),
+        InlineKeyboardButton(label,          callback_data=confirm_data),
+        InlineKeyboardButton("❌ Ignorar",   callback_data=skip_data),
     ]])
 
 
