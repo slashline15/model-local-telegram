@@ -103,17 +103,16 @@ class InteractionsRepo(BaseRepo):
         requester_user_id: int | None,
         project_id: int | None = None,
     ) -> list[Interaction]:
-        """Busca interações por id, com filtro de visibilidade obrigatório.
+        """Busca interações por id — isolamento por obra, sem filtro de leitura.
 
-        - `requester_user_id=<int>`: retorna só linhas públicas ou do próprio
-          usuário (bloqueia leitura cruzada via #iXX e RAG).
-        - `requester_user_id=None`: bypass — uso interno (admin, jobs, testes).
-          Tem que ser explícito pra impedir vazamento por esquecimento.
-        - `project_id=<int>`: também restringe à obra ativa (evita confusão
-          de contexto entre obras do mesmo usuário). `None` = não filtra.
+        ACL simplificado (decisão 2026-06): tudo indexado fica disponível pra
+        qualquer membro da obra. A segurança está na decisão consciente de
+        indexar (confirmação no /doc), não num filtro automático de
+        visibilidade. `requester_user_id` mantido na assinatura por
+        compatibilidade; hoje não filtra nada.
 
-        TODO: brecha N1/N2 (responsáveis lêem privadas alheias) virá quando a
-        hierarquia de papéis (N1/N2/N3) estiver mapeada em users.role.
+        - `project_id=<int>`: restringe à obra ativa (evita confusão de
+          contexto entre obras do mesmo usuário). `None` = não filtra.
         """
         ids_list = list(ids)
         if not ids_list:
@@ -121,9 +120,6 @@ class InteractionsRepo(BaseRepo):
         placeholders = ",".join("?" for _ in ids_list)
         params: list[Any] = list(ids_list)
         where = f"id IN ({placeholders})"
-        if requester_user_id is not None:
-            where += " AND (visibilidade = 'publica' OR user_id = ?)"
-            params.append(requester_user_id)
         if project_id is not None:
             where += " AND project_id = ?"
             params.append(project_id)

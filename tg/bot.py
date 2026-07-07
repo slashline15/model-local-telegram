@@ -62,6 +62,7 @@ _BOT_COMMANDS: list[BotCommand] = [
     BotCommand("empresa",    "empresa add Nome; CNPJ; own|third"),
     BotCommand("colabs",     "colaboradores [função]"),
     BotCommand("colab",      "colab add Nome; Função; Empresa"),
+    BotCommand("doc",        "indexar documento classificado (reply)"),
     BotCommand("config",     "modelo + temperatura"),
     BotCommand("stats",      "estatísticas globais"),
     BotCommand("recall",     "debug do RAG (top hits)"),

@@ -6,9 +6,13 @@ from database.repos.chunks import ChunksRepo
 from database.repos.clima import ClimaRepo
 from database.repos.colaboradores import ColaboradoresRepo
 from database.repos.cronograma import CronogramaEtapasRepo
+from database.repos.doc_classes import DocClassesRepo
+from database.repos.documents import DocumentsRepo
 from database.repos.efetivo import EfetivoRepo
 from database.repos.empresas import EmpresasRepo
+from database.repos.fornecedores import FornecedoresRepo
 from database.repos.funcoes import FuncoesRepo
+from database.repos.global_chunks import GlobalChunksRepo
 from database.repos.interactions import InteractionsRepo
 from database.repos.invites import InvitesRepo
 from database.repos.members import MembersRepo
@@ -27,9 +31,13 @@ __all__ = [
     "ClimaRepo",
     "ColaboradoresRepo",
     "CronogramaEtapasRepo",
+    "DocClassesRepo",
+    "DocumentsRepo",
     "EfetivoRepo",
     "EmpresasRepo",
+    "FornecedoresRepo",
     "FuncoesRepo",
+    "GlobalChunksRepo",
     "InteractionsRepo",
     "InvitesRepo",
     "MembersRepo",

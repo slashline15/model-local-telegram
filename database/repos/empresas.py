@@ -101,6 +101,15 @@ class EmpresasRepo(BaseRepo):
                 rows = await cur.fetchall()
         return [_row_to_empresa(r) for r in rows]
 
+    async def set_fornecedor(self, empresa_id: int, fornecedor_id: int) -> None:
+        """Vincula a empresa local ao catálogo global (auto-link por CNPJ)."""
+        async with aiosqlite.connect(self._db_path) as conn:
+            await conn.execute(
+                "UPDATE empresas SET fornecedor_id = ? WHERE id = ?",
+                (fornecedor_id, empresa_id),
+            )
+            await conn.commit()
+
     async def set_ativo(self, empresa_id: int, ativo: bool) -> None:
         async with aiosqlite.connect(self._db_path) as conn:
             await conn.execute(
@@ -121,4 +130,9 @@ def _row_to_empresa(row: aiosqlite.Row) -> Empresa:
         ativo=bool(row["ativo"]),
         created_by=int(row["created_by"]),
         created_at=str(row["created_at"]),
+        fornecedor_id=(
+            int(row["fornecedor_id"])
+            if "fornecedor_id" in row.keys() and row["fornecedor_id"] is not None
+            else None
+        ),
     )

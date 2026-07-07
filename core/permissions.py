@@ -104,6 +104,25 @@ def project_role_implies_global_role(project_role: str) -> str | None:
     return None
 
 
+# Nível de acesso N1/N2/N3 dentro da obra (convenção da refundação 2026-05:
+# 1=N1 admin, 2=N2 co-responsável, 3=N3 operacional). Comparação <= libera.
+_PROJECT_LEVEL: dict[str, int] = {
+    PROJECT_ROLE_ADMIN: 1,
+    PROJECT_ROLE_CO_RESPONSIBLE: 2,
+    PROJECT_ROLE_OPERATOR: 3,
+    PROJECT_ROLE_CLIENT: 3,
+}
+
+
+def user_level_in_project(user: User, member: ProjectMember | None) -> int:
+    """Nível N1/N2/N3 do usuário na obra. Superadmin global = N1 sempre."""
+    if user.role == GLOBAL_ROLE_SUPERADMIN:
+        return 1
+    if member is None:
+        return 3
+    return _PROJECT_LEVEL.get(member.role, 3)
+
+
 def default_member_permissions(role: str) -> dict[str, bool]:
     """Permissões padrão ao adicionar um membro com determinado role."""
     if role == PROJECT_ROLE_ADMIN:

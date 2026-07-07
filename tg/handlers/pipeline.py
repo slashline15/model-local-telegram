@@ -22,6 +22,7 @@ from telegram.ext import ContextTypes
 
 from agents.router import AgentRouter
 from core.chat_runner import ChatRunResult, run_chat_with_fallback
+from core.chunking import chunk_text, chunk_text_fixed
 from core.codes import format_hashtag, parse_code
 from core.logger import get_logger
 from core.permissions import (
@@ -103,45 +104,10 @@ def _file_too_big(size_bytes: int | None, limit_mb: int) -> tuple[bool, float]:
     return mb > limit_mb, mb
 
 
-def _chunk_text_fixed(text: str, chunk_size: int, overlap: int) -> list[str]:
-    """Sliding-window fallback para parágrafos maiores que chunk_size."""
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        if end >= len(text):
-            break
-        start += chunk_size - overlap
-    return chunks
-
-
-def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
-    """Chunking semântico: respeita quebras de parágrafo. Fallback para sliding-window."""
-    import re as _re
-    if not text:
-        return []
-    if len(text) <= chunk_size:
-        return [text]
-    paragraphs = [p.strip() for p in _re.split(r"\n\n+", text) if p.strip()]
-    if not paragraphs:
-        return _chunk_text_fixed(text, chunk_size, overlap)
-    chunks: list[str] = []
-    current = ""
-    for para in paragraphs:
-        if len(current) + len(para) + 2 <= chunk_size:
-            current = (current + "\n\n" + para).strip()
-        else:
-            if current:
-                chunks.append(current)
-            if len(para) > chunk_size:
-                chunks.extend(_chunk_text_fixed(para, chunk_size, overlap))
-                current = ""
-            else:
-                current = para
-    if current:
-        chunks.append(current)
-    return chunks or [text]
+# Implementação movida pra core/chunking.py (compartilhada com scripts
+# offline). Aliases mantidos por retrocompat de testes e imports internos.
+_chunk_text_fixed = chunk_text_fixed
+_chunk_text = chunk_text
 
 
 def _parse_doc_class(caption: str) -> str:
@@ -606,12 +572,14 @@ async def _process_user_input(
         # Sem isso, a IA "esquece" em que obra estamos e não consegue responder
         # perguntas como "qual obra estamos?" ou citar o nome da obra na resposta.
         obra_context: str | None = None
+        global_rag_weight = 0.5  # default pra chat sem obra ativa
         active_project_id = (
             user_settings.current_project_id if user_settings else None
         )
         if active_project_id is not None:
             proj = await deps.sqlite.projects.get_by_id(active_project_id)
             if proj is not None:
+                global_rag_weight = proj.global_rag_weight
                 obra_context = (
                     f"Obra ativa: {proj.name} (#{proj.uid}).\n"
                     f"Use esse nome quando o usuário perguntar a obra. "
@@ -637,6 +605,7 @@ async def _process_user_input(
                 intent=intent,
                 now_iso=_now_local_iso(),
                 obra_context=obra_context,
+                global_weight=global_rag_weight,
             )
             s.set(
                 hits=len(bundle.hits),
@@ -644,6 +613,7 @@ async def _process_user_input(
                 negatives=len(bundle.negatives),
                 neutral=len(bundle.neutral),
                 history=len(bundle.history),
+                global_refs=len(bundle.global_refs),
                 fallback_used=bundle.fallback_used,
                 embedding_dim=bundle.embedding_dim,
             )

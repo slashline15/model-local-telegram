@@ -97,6 +97,8 @@ class Project:
     created_by: int
     admin_id: int        # único admin da obra; quem aprova RDOs
     created_at: str
+    # Peso do índice global na busca dual (0.0 = ignora global, 1.0 = paridade).
+    global_rag_weight: float = 0.5
 
 
 @dataclass(slots=True, frozen=True)
@@ -144,6 +146,7 @@ class Empresa:
     ativo: bool
     created_by: int
     created_at: str
+    fornecedor_id: int | None = None  # FK opcional pro catálogo global
 
 
 @dataclass(slots=True, frozen=True)
@@ -182,6 +185,7 @@ class InteractionChunk:
     doc_class: str
     weight: float
     created_at: str
+    document_id: int | None = None  # preenchido quando o chunk veio de /doc
 
 
 @dataclass(slots=True, frozen=True)
@@ -284,6 +288,63 @@ class CronogramaEtapa:
     data_prevista_inicio: str | None
     data_prevista_termino: str | None
     ordem: int
+    created_at: str
+
+
+# ───── /doc com ACL (refundação passo 3) ─────
+
+@dataclass(slots=True, frozen=True)
+class DocClass:
+    slug: str
+    label: str
+    peso: float
+    nivel_min_classificar: int  # 1=N1, 2=N2, 3=N3 — <= libera
+    nivel_min_ler: int          # mantido pra auditoria; RAG não filtra mais
+    ativo: bool
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class Document:
+    id: int
+    uid: str
+    project_id: int
+    doc_class: str
+    titulo: str
+    arquivo_path: str | None
+    arquivo_hash: str | None
+    mime: str | None
+    enviado_por: int
+    interaction_id: int | None
+    visibilidade: str  # publica | privada (privada = arquiva sem indexar)
+    created_at: str
+
+
+# ───── Dual RAG + fornecedores globais (2026-06) ─────
+
+@dataclass(slots=True, frozen=True)
+class GlobalChunk:
+    id: int
+    source: str        # 'manual' | 'norma_abnt' | 'glossario' | etc.
+    doc_class: str
+    titulo: str | None
+    conteudo: str
+    weight: float
+    ativo: bool
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class Fornecedor:
+    id: int
+    cnpj: str
+    razao_social: str
+    nome_fantasia: str | None
+    tipo_atividade: str | None  # 'servicos' | 'materiais' | 'ambos' | 'outro'
+    situacao_rf: str | None
+    fonte: str                  # 'manual' | 'receita_federal'
+    dados_rf: str | None        # JSON blob completo da Receita
+    consultado_em: str | None
     created_at: str
 
 

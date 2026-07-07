@@ -371,6 +371,39 @@ CREATE TABLE IF NOT EXISTS anotacoes (
 );
 """
 
+# Chunks da base global de nicho (normas, vocabulário técnico, referências).
+# Instância única para todo o sistema — sem project_id, sem ACL: qualquer
+# membro de qualquer obra lê. Populada offline via scripts/populate_global_base.
+_GLOBAL_CHUNKS_BASE: str = """
+CREATE TABLE IF NOT EXISTS global_chunks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source      TEXT    NOT NULL,  -- 'manual' | 'norma_abnt' | 'glossario' | etc.
+    doc_class   TEXT    NOT NULL DEFAULT 'norma',
+    titulo      TEXT,
+    conteudo    TEXT    NOT NULL,
+    weight      REAL    NOT NULL DEFAULT 1.0,
+    ativo       INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT    NOT NULL
+);
+"""
+
+# Catálogo canônico de fornecedores — global, CNPJ como chave natural.
+# `empresas` (por obra) referencia via fornecedor_id; medições ficam locais.
+_FORNECEDORES_BASE: str = """
+CREATE TABLE IF NOT EXISTS fornecedores (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    cnpj            TEXT    UNIQUE NOT NULL,
+    razao_social    TEXT    NOT NULL,
+    nome_fantasia   TEXT,
+    tipo_atividade  TEXT,               -- 'servicos' | 'materiais' | 'ambos' | 'outro'
+    situacao_rf     TEXT,               -- 'Ativa' | 'Baixada' | 'Inapta' | etc.
+    fonte           TEXT    NOT NULL DEFAULT 'manual',  -- 'manual' | 'receita_federal'
+    dados_rf        TEXT,               -- JSON blob completo da Receita (opcional)
+    consultado_em   TEXT,               -- ISO timestamp da última consulta à RF
+    created_at      TEXT    NOT NULL
+);
+"""
+
 # Satélites de interactions (1:1). Populados em paralelo a interactions
 # até a coexistência terminar; depois interactions perde essas colunas.
 _INTERACTION_TELEMETRY_BASE: str = """
@@ -446,6 +479,7 @@ _DOC_CLASSES_SEED: tuple[tuple[str, str, float, int, int], ...] = (
     ("norma",      "Norma técnica",            1.3, 2, 3),
     ("proposta",   "Proposta comercial",       1.1, 2, 2),
     ("folha_pgto", "Folha de pagamento",       1.4, 1, 1),
+    ("planilha_orcamento", "Planilha orçamentária", 1.3, 2, 2),
     ("anotacao",   "Anotação livre",           1.0, 3, 3),
     ("reuniao",    "Transcrição de reunião",   0.7, 3, 3),
     ("outro",      "Outro",                    0.8, 3, 3),
@@ -479,6 +513,9 @@ _TABLES: tuple[str, ...] = (
     _ANOTACOES_BASE,
     _INTERACTION_TELEMETRY_BASE,
     _INTERACTION_RAG_BASE,
+    # Dual RAG + fornecedores globais 2026-06
+    _GLOBAL_CHUNKS_BASE,
+    _FORNECEDORES_BASE,
 )
 
 # Funções fixas do desenho do excalidraw — seed inicial, idempotente.
@@ -555,6 +592,10 @@ _INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_anotacoes_project_dia  ON anotacoes(project_id, dia);",
     "CREATE INDEX IF NOT EXISTS idx_anotacoes_atividade    ON anotacoes(atividade_id);",
     "CREATE INDEX IF NOT EXISTS idx_anotacoes_natureza     ON anotacoes(natureza);",
+    # Dual RAG + fornecedores globais 2026-06
+    "CREATE INDEX IF NOT EXISTS idx_global_chunks_source   ON global_chunks(source);",
+    "CREATE INDEX IF NOT EXISTS idx_global_chunks_ativo    ON global_chunks(ativo);",
+    "CREATE INDEX IF NOT EXISTS idx_fornecedores_cnpj      ON fornecedores(cnpj);",
 )
 
 # (tabela, coluna, declaração) — aplicado se faltar a coluna em DBs antigos.
@@ -586,6 +627,9 @@ _LEGACY_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("interaction_chunks", "document_id",  "INTEGER REFERENCES documents(id)"),
     ("interactions",       "visibilidade", "TEXT NOT NULL DEFAULT 'publica'"),
     ("documents",          "visibilidade", "TEXT NOT NULL DEFAULT 'publica'"),
+    # Dual RAG + fornecedores globais 2026-06
+    ("projects", "global_rag_weight", "REAL NOT NULL DEFAULT 0.5"),
+    ("empresas", "fornecedor_id",     "INTEGER REFERENCES fornecedores(id)"),
 )
 
 

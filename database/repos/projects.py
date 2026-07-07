@@ -132,4 +132,9 @@ def _row_to_project(row: aiosqlite.Row) -> Project:
         created_by=int(row["created_by"]),
         admin_id=int(admin_id),
         created_at=str(row["created_at"]),
+        global_rag_weight=(
+            float(row["global_rag_weight"])
+            if "global_rag_weight" in row.keys() and row["global_rag_weight"] is not None
+            else 0.5
+        ),
     )

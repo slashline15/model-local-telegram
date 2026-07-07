@@ -44,9 +44,13 @@ from database.repos import (
     ClimaRepo,
     ColaboradoresRepo,
     CronogramaEtapasRepo,
+    DocClassesRepo,
+    DocumentsRepo,
     EfetivoRepo,
     EmpresasRepo,
+    FornecedoresRepo,
     FuncoesRepo,
+    GlobalChunksRepo,
     InteractionsRepo,
     InvitesRepo,
     MembersRepo,
@@ -91,6 +95,12 @@ class SQLiteManager:
         self.atividades = AtividadesRepo(db_path)
         self.anotacoes = AnotacoesRepo(db_path)
         self.cronograma = CronogramaEtapasRepo(db_path)
+        # Dual RAG + fornecedores globais 2026-06
+        self.global_chunks = GlobalChunksRepo(db_path)
+        self.fornecedores = FornecedoresRepo(db_path)
+        # /doc com ACL (refundação passo 3)
+        self.doc_classes = DocClassesRepo(db_path)
+        self.documents = DocumentsRepo(db_path)
 
     async def init_schema(self) -> None:
         await _init_schema(self._db_path)

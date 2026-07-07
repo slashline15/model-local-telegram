@@ -145,10 +145,33 @@ async def cmd_empresa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await msg.reply_text(f"Erro: {exc}")
         return
 
+    # Auto-link com o catálogo global de fornecedores (lookup Receita Federal).
+    # Falha de rede não atrapalha o cadastro — só fica sem enriquecimento.
+    forn_info = ""
+    if cnpj:
+        from core.receita_client import ensure_fornecedor
+
+        try:
+            forn = await ensure_fornecedor(
+                deps.sqlite.fornecedores, cnpj, fallback_nome=nome
+            )
+            if forn is not None:
+                await deps.sqlite.empresas.set_fornecedor(emp.id, forn.id)
+                if forn.fonte == "receita_federal":
+                    situacao = (
+                        f" · situação RF: {forn.situacao_rf}" if forn.situacao_rf else ""
+                    )
+                    forn_info = (
+                        f"\n🔎 Receita Federal: <b>{escape(forn.razao_social)}</b>"
+                        f"<i>{escape(situacao)}</i>"
+                    )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Auto-link fornecedor falhou (cnpj=%s): %s", cnpj, exc)
+
     label = "🏠 própria" if emp.tipo == EMPRESA_TIPO_OWN else "🤝 terceira"
     await msg.reply_text(
         f"✅ Empresa criada <code>#{escape(emp.uid)}</code> "
-        f"<b>{escape(emp.nome)}</b> <i>({label})</i>",
+        f"<b>{escape(emp.nome)}</b> <i>({label})</i>{forn_info}",
         parse_mode=ParseMode.HTML,
     )
 

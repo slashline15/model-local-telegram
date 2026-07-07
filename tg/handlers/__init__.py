@@ -20,7 +20,7 @@ def register_all_handlers(app: "Application") -> None:
     from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
     from tg import callbacks
-    from tg.handlers import debug, pipeline, recall, system
+    from tg.handlers import debug, doc, pipeline, recall, system
     from tg.handlers.projects import on_obra_select
     from tg.handlers.rdo import cadastros, cronograma, diario
 
@@ -69,6 +69,9 @@ def register_all_handlers(app: "Application") -> None:
     # ── RDO — cronograma ──────────────────────────────────────────────────
     app.add_handler(CommandHandler("cronograma",  cronograma.cmd_cronograma))
 
+    # ── Documentos classificados ──────────────────────────────────────────
+    app.add_handler(CommandHandler("doc",         doc.cmd_doc))
+
     # ── Mídia (pipeline principal) ────────────────────────────────────────
     app.add_handler(MessageHandler(filters.PHOTO, pipeline.on_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, pipeline.on_voice))
@@ -82,6 +85,7 @@ def register_all_handlers(app: "Application") -> None:
     app.add_handler(CallbackQueryHandler(callbacks.on_config,           pattern=r"^cfg:"))
     app.add_handler(CallbackQueryHandler(callbacks.on_reminder_cancel,  pattern=r"^rem:cancel:"))
     app.add_handler(CallbackQueryHandler(on_obra_select,                pattern=r"^obra:set:"))
+    app.add_handler(CallbackQueryHandler(doc.on_doc_callback,           pattern=r"^doc:"))
 
     # ── Debug (superadmin) ────────────────────────────────────────────────
     app.add_handler(CommandHandler("consumo",         debug.cmd_consumo))

@@ -28,8 +28,9 @@ refundação ativa (Fase 4, plano em 8 passos).
 - `database/` — schema, `sqlite_mgr.py` (fachada), `repos/` (CRUD por tabela),
   `faiss_mgr.py`.
 - `core/` — utilidades (logger, pipeline recorder, codes, exceptions).
-- `scripts/` — `reindex.py`, `bootstrap_check.py`.
-- `tests/` — pytest, 115+ testes. `FakeOllama` em `conftest.py` evita rede.
+- `scripts/` — `reindex.py` (`--scope project|global|all`),
+  `populate_global_base.py`, `bootstrap_check.py`.
+- `tests/` — pytest, 145+ testes. `FakeOllama` em `conftest.py` evita rede.
 
 ## Comandos úteis
 
@@ -50,7 +51,11 @@ python main.py                    # bot real (precisa Ollama + token)
 
 ## Plano em curso
 
-Fase 4 (refundação 2026-05). MVP inline concluído (2026-06):
-feedback binário + menu RDO + tools de RDO + chunking semântico + cronograma MVP.
-Próximo passo: comando `/doc` real com ACL.
+Fase 4 (refundação 2026-05). Concluído em 2026-07: dual RAG (base global de
+nicho + base da obra, peso em `projects.global_rag_weight`), ACL simplificado
+(indexou → membro da obra lê; segurança na decisão consciente de indexar),
+`/doc` com confirmação pra classes sensíveis, fornecedores globais com lookup
+Receita Federal no `/empresa add`.
+Próximo passo: popular a base global (`python -m scripts.populate_global_base
+<dir>`) e passo 5 da refundação (`interactions` para de receber dado de obra).
 Status detalhado em `ROADMAP.md` na tabela "Plano de transição".

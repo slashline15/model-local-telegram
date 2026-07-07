@@ -57,6 +57,15 @@ async def _bootstrap() -> BotDependencies:
     )
     await faiss.init()
 
+    # Índice da base global de nicho (dual RAG). Vazio até alguém rodar
+    # scripts/populate_global_base.py — o RAG ignora índice vazio.
+    faiss_global = FaissManager(
+        dim=settings.embedding_dim,
+        index_path=settings.faiss_global_index_path,
+        id_map_path=settings.faiss_global_id_map_path,
+    )
+    await faiss_global.init()
+
     ollama = OllamaClient(
         host=settings.ollama_host,
         default_model=settings.ollama_default_model,
@@ -79,6 +88,9 @@ async def _bootstrap() -> BotDependencies:
         positive_threshold=settings.rag_positive_score_threshold,
         negative_threshold=settings.rag_negative_score_threshold,
         embedding_model=settings.ollama_embedding_model,
+        global_faiss=faiss_global,
+        global_chunks=sqlite.global_chunks,
+        max_global=settings.rag_max_global,
     )
 
     # Health-check do Ollama é feito em `tg.bot._on_post_init`, dentro do loop

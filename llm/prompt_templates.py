@@ -127,6 +127,33 @@ def _history_block(items: list[FewShotExample]) -> str:
     return "\n\n".join(chunks)
 
 
+@dataclass(slots=True, frozen=True)
+class GlobalRef:
+    """Trecho da base global de nicho (normas, glossário) pro prompt."""
+
+    conteudo: str
+    titulo: str | None = None
+    source: str | None = None
+
+
+def render_global_refs(refs: list[GlobalRef]) -> str:
+    """Bloco de referências técnicas da base global — vai ANTES dos exemplos."""
+    if not refs:
+        return ""
+    chunks: list[str] = []
+    for i, ref in enumerate(refs, start=1):
+        header = f"Referência {i}"
+        if ref.titulo:
+            header += f" — {ref.titulo}"
+        if ref.source:
+            header += f" ({ref.source})"
+        chunks.append(f"{header}:\n{_truncate(ref.conteudo, 800)}")
+    return (
+        "[Referências técnicas — base de conhecimento do nicho]\n"
+        + "\n\n".join(chunks)
+    )
+
+
 def render_contrastive_prompt(
     user_message: str,
     positives: list[FewShotExample],

@@ -21,6 +21,7 @@ class ChunkInsert:
     content: str
     doc_class: str
     weight: float
+    document_id: int | None = None  # preenchido quando o chunk vem de /doc
 
 
 class ChunksRepo(BaseRepo):
@@ -64,10 +65,14 @@ class ChunksRepo(BaseRepo):
                 cur = await conn.execute(
                     """
                     INSERT INTO interaction_chunks
-                        (interaction_id, chunk_idx, content, doc_class, weight, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (interaction_id, chunk_idx, content, doc_class, weight,
+                         document_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (interaction_id, c.chunk_idx, c.content, c.doc_class, c.weight, ts),
+                    (
+                        interaction_id, c.chunk_idx, c.content, c.doc_class,
+                        c.weight, c.document_id, ts,
+                    ),
                 )
                 assert cur.lastrowid is not None
                 chunk_ids.append(int(cur.lastrowid))
@@ -78,7 +83,8 @@ class ChunksRepo(BaseRepo):
         async with aiosqlite.connect(self._db_path) as conn:
             async with conn.execute(
                 """
-                SELECT id, interaction_id, chunk_idx, content, doc_class, weight, created_at
+                SELECT id, interaction_id, chunk_idx, content, doc_class, weight,
+                       created_at, document_id
                 FROM interaction_chunks WHERE interaction_id = ? ORDER BY chunk_idx
                 """,
                 (interaction_id,),
@@ -93,7 +99,8 @@ class ChunksRepo(BaseRepo):
         async with aiosqlite.connect(self._db_path) as conn:
             async with conn.execute(
                 f"""
-                SELECT id, interaction_id, chunk_idx, content, doc_class, weight, created_at
+                SELECT id, interaction_id, chunk_idx, content, doc_class, weight,
+                       created_at, document_id
                 FROM interaction_chunks WHERE id IN ({placeholders})
                 """,
                 chunk_ids,
@@ -129,4 +136,5 @@ def _row_to_chunk(r: tuple) -> InteractionChunk:
         doc_class=str(r[4]),
         weight=float(r[5]),
         created_at=str(r[6]),
+        document_id=int(r[7]) if len(r) > 7 and r[7] is not None else None,
     )

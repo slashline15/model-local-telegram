@@ -10,6 +10,32 @@ multi-usuário de Relatório Diário de Obra.
 
 ## Changelog
 
+- **2026-07-07** — Dual RAG + ACL simplificado + fornecedores globais + `/doc`.
+  Implementa o plano `docs/plano-dual-rag-acl-fornecedores.md`:
+  - **Dual RAG**: `faiss_global.index` (base de nicho) buscado em paralelo ao
+    índice local; peso por obra em `projects.global_rag_weight` (default 0.5,
+    0 desliga). Referências entram no prompt como bloco
+    `[Referências técnicas]`; visíveis no `/recall`. População offline via
+    `python -m scripts.populate_global_base <dir>`.
+  - **ACL simplificado**: `fetch_by_ids` não filtra mais `visibilidade` —
+    membro da obra lê tudo que foi indexado nela. Isolamento por
+    `project_id` intacto. Segurança = decisão consciente de indexar.
+  - **`/doc <classe> [título]`** (reply a arquivo ou texto): classificação com
+    ACL por nível (`nivel_min_classificar` × papel na obra N1/N2/N3), classes
+    sensíveis (folha_pgto, planilha_orcamento, contrato, proposta) pedem
+    confirmação inline antes de indexar. Grava em `documents` + chunks com
+    peso da classe + interação de log.
+  - **Fornecedores globais**: tabela `fornecedores` (CNPJ único) + lookup
+    Receita Federal (publica.cnpj.ws, cache 30d) no `/empresa add` com CNPJ;
+    `empresas.fornecedor_id` faz o vínculo. Falha de rede não bloqueia cadastro.
+  - **Fix**: `scripts/reindex.py` indexava `interaction_id` num índice que o
+    RAG lê como `chunk_id` (quebrado desde o refactor de chunking). Agora
+    reconstrói de `interaction_chunks` + re-chunka interações órfãs; ganhou
+    `--scope project|global|all`.
+  - **Desvio consciente do plano**: índices FAISS separados por obra
+    (`faiss_{project_id}.index`) ficaram adiados — o filtro por `project_id`
+    no SQLite já garante o isolamento e a separação física não muda
+    comportamento visível. Fica pra quando houver volume real.
 - **2026-05-14 (2)** — Bug-fix RAG por obra + handlers de cadastro do diário.
   RAG agora propaga `project_id` ativo: `fetch_by_ids` e `list_user_history`
   filtram pela obra (fecha confusão de contexto entre obras do mesmo dono).
@@ -33,17 +59,19 @@ multi-usuário de Relatório Diário de Obra.
 
 ### ✅ Funcionando
 - RAG contrastivo (FAISS, nomic-embed-text 768d)
+- Dual RAG: base global de nicho + base da obra (peso por projeto)
 - Fallback chain Ollama → OpenAI
 - Scoring 1-5 + aprendizado contrastivo
 - Intent/tags, tool use, web_search, reminders
 - Pipeline auditável (`pipeline_steps` + `run_id`)
 - Multi-usuário com `users`/`projects`/`project_members`/`invites`
 - Schema novo (Refundação 2026-05) criado, vazio
-- Isolamento básico de chats (visibilidade publica/privada)
+- `/doc` com ACL de classificação + confirmação pra classes sensíveis
+- ACL simplificado: membro da obra lê tudo indexado nela (2026-06)
+- Fornecedores globais com lookup Receita Federal no `/empresa add`
 
 ### 🔄 Em construção
-- Comando `/doc` real com ACL (Passo 3 da refundação)
-- Hierarquia de papéis N1/N2/N3 mapeada em `users.role`
+- Popular a base global (rodar `populate_global_base` com conteúdo real)
 - Classificação de intent de obra (texto livre → registro estruturado)
 
 ### ⏳ Não começado
@@ -61,7 +89,7 @@ multi-usuário de Relatório Diário de Obra.
 | 1 | Aprovar esqueleto | ✅ 2026-05-12 |
 | 2 | Criar tabelas novas vazias | ✅ 2026-05-12 |
 | 2.5 | Isolamento básico de chats (visibilidade) | ✅ 2026-05-14 |
-| 3 | `/doc` + `role_permissions` + ACL no retrieval | |
+| 3 | `/doc` + ACL simplificado no retrieval | ✅ 2026-07-07 |
 | 4 | Handlers de cadastro (`/clima /efetivo /atividade /anotacao /rdo`) | ✅ 2026-05-14 |
 | 5 | `interactions` para de receber dado de obra | |
 | 6 | `vw_rdo_dia` a partir de dias reais | |

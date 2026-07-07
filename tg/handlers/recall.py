@@ -101,7 +101,7 @@ async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.effective_message.reply_text(f"Erro no recall: {exc}")
         return
 
-    if not bundle.hits:
+    if not bundle.hits and not bundle.global_refs:
         await update.effective_message.reply_text(
             "Nenhum hit. FAISS provavelmente está vazio — converse mais para popular."
         )
@@ -139,6 +139,11 @@ async def cmd_recall(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         lines.append(f"<b>negativos</b>: {bundle.negative_ids}")
     if bundle.neutral_ids:
         lines.append(f"<b>neutros (fallback)</b>: {bundle.neutral_ids}")
+    if bundle.global_refs:
+        lines.append("\n<b>🌐 Base global</b>:")
+        for g in bundle.global_refs:
+            titulo = g.titulo or g.conteudo[:60]
+            lines.append(f"• g{g.id} <i>{escape(titulo)}</i> ({escape(g.source)})")
 
     await update.effective_message.reply_text(
         "\n".join(lines), parse_mode=ParseMode.HTML

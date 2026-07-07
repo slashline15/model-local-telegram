@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     )
     faiss_index_path: Path = Field(default=Path("./data/faiss.index"))
     faiss_id_map_path: Path = Field(default=Path("./data/faiss_id_map.json"))
+    # Índice da base global de nicho (dual RAG) — populado offline via
+    # scripts/populate_global_base.py; ausente ⇒ busca global desligada.
+    faiss_global_index_path: Path = Field(default=Path("./data/faiss_global.index"))
+    faiss_global_id_map_path: Path = Field(default=Path("./data/faiss_global_ids.json"))
     media_dir: Path = Field(default=Path("./data/media"))
 
     embedding_dim: int = Field(default=768)
@@ -99,6 +103,8 @@ class Settings(BaseSettings):
     rag_max_neutral: int = Field(default=3)
     rag_positive_score_threshold: int = Field(default=4)
     rag_negative_score_threshold: int = Field(default=2)
+    # Máximo de referências da base global injetadas no prompt (dual RAG).
+    rag_max_global: int = Field(default=3)
     # Histórico cronológico injetado no prompt (independente do RAG semântico).
     rag_recent_history: int = Field(default=6)
 

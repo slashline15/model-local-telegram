@@ -82,6 +82,14 @@ def confirm_rdo_keyboard(
     ]])
 
 
+def doc_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Confirmação de indexação de documento sensível (/doc)."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Indexar",  callback_data="doc:confirm"),
+        InlineKeyboardButton("❌ Cancelar", callback_data="doc:cancel"),
+    ]])
+
+
 def obras_keyboard(
     projects: list,  # list[Project] — evita import circular
     active_id: int | None,

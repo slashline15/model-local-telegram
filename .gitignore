@@ -19,3 +19,7 @@ docs/notes/*
 docs/rdo_preview_exemplo.html
 graphify-chat
 graphify-out
+.graphify_incremental_filtered.json
+.graphify_python
+.tmp.driveupload
+docs/workflow-resposta-bot.html
